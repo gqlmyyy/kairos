@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.Python
+venv/
+.venv/
+env/
+
+# Secrets — NEVER commit
+.env
+*.env
+!.env.example
+
+# Databases
+*.db
+*.db-wal
+*.db-shm
+
+# Logs (rotated locally, not tracked)
+logs/
+*.log
+
+# Generated datasets / model artifacts (large, reproducible)
+data/entry_v2/
+data/exit_v2/
+models_backup/
+models/tmp_*.json
+models/test_*.json
+
+# Reports & scratch output
+reports/output/
+*.bak
+*.bak[0-9]
+tmp_*
+temp_*
+
+# Editors / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# DB backups (local safety copies)
+backups/

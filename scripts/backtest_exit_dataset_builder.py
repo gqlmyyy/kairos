@@ -46,7 +46,7 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 from data.market.client import get_candles
-from risk.sltp import calculate_sl_tp
+from trade_management.layer1_initial_protection import compute_initial_protection
 from analysis.technical.indicators import (
     get_trend_score_from_snapshot,
     get_momentum_score_from_snapshot,
@@ -464,8 +464,11 @@ def _build_dataset() -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
 
             session = _session_from_epoch(bars[i]["t"])
 
-            # SL/TP real
-            sl, tp = calculate_sl_tp(symbol, entry_price, direction, float(atr_entry))
+            # SL/TP from trade management Layer 1, so the backtest uses exactly
+            # the same protection maths as live entries.
+            sl, tp = compute_initial_protection(
+                symbol, float(atr_entry), regime="normal"
+            ).apply_to(entry_price, direction)
 
             exit_price, label, mfe, mae, exit_reason, _ = _simulate_trade(
                 symbol=symbol,
