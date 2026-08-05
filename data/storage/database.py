@@ -428,10 +428,15 @@ def upsert_execution_expected(
 
             expected_indicators_json=excluded.expected_indicators_json,
 
-            expected_sl=excluded.expected_sl,
-            expected_tp=excluded.expected_tp,
-            expected_volume=excluded.expected_volume,
-            entry_profile=excluded.entry_profile,
+            -- Never destroy a value that is already recorded for this order.
+            -- expected_tp in particular is populated for 504 historically
+            -- imported rows; a live upsert that collides with one of them must
+            -- not overwrite the imported figure. COALESCE keeps the first
+            -- non-null write and lets later ones only fill genuine gaps.
+            expected_sl=COALESCE(execution_dataset.expected_sl, excluded.expected_sl),
+            expected_tp=COALESCE(execution_dataset.expected_tp, excluded.expected_tp),
+            expected_volume=COALESCE(execution_dataset.expected_volume, excluded.expected_volume),
+            entry_profile=COALESCE(execution_dataset.entry_profile, excluded.entry_profile),
             status='open'
     """, (
         now, now,

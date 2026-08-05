@@ -58,8 +58,13 @@ class TradeRuntimeState:
         self.settings = settings
         self.breakeven_done = False
         self.partial_levels_done: set = set()
+        # R multiples: what the layers reason in.
         self.mfe_r = 0.0
         self.mae_r = 0.0
+        # Dollars: what execution_dataset.mfe/mae have always stored, and what
+        # the exit-model trainer compares against absolute thresholds.
+        self.mfe_usd = 0.0
+        self.mae_usd = 0.0
 
 
 class PostEntryManager:
@@ -198,19 +203,42 @@ class PostEntryManager:
             logger.warning("[POST_ENTRY] readings unavailable for %s: %s", ctx.symbol, exc)
         return readings
 
-    def _update_excursions(self, ctx: TradeContext, state: TradeRuntimeState) -> None:
-        """Track MFE/MAE in R and persist them for the exit-model dataset."""
+    def _update_excursions(
+        self, ctx: TradeContext, state: TradeRuntimeState, profit_usd: float
+    ) -> None:
+        """Track maximum favourable/adverse excursion.
+
+        Two units are kept on purpose:
+
+        - ``mfe_r``/``mae_r`` (R multiples) are what the layers reason in, so
+          trailing calibration is comparable across symbols and position sizes.
+        - ``mfe_usd``/``mae_usd`` (dollars) are what gets persisted, because the
+          execution_dataset.mfe/mae columns have always held dollars and
+          scripts/train_exit_model.py compares them against absolute dollar
+          thresholds (``mfe > 20``, ``mfe > 10``). Writing R into those columns
+          would silently change the meaning of the training label.
+        """
         profit_r = ctx.profit_r
         changed = False
+
         if profit_r > state.mfe_r:
             state.mfe_r = profit_r
             changed = True
         if profit_r < state.mae_r:
             state.mae_r = profit_r
             changed = True
+
+        if profit_usd > state.mfe_usd:
+            state.mfe_usd = profit_usd
+            changed = True
+        if profit_usd < state.mae_usd:
+            state.mae_usd = profit_usd
+            changed = True
+
         if changed:
             try:
-                update_execution_mfe_mae(ctx.order_id, state.mfe_r, state.mae_r)
+                # Dollars, matching the historical column contract.
+                update_execution_mfe_mae(ctx.order_id, state.mfe_usd, state.mae_usd)
             except Exception as exc:
                 logger.warning("[POST_ENTRY] mfe/mae persist failed %s: %s", ctx.order_id, exc)
 
@@ -304,7 +332,11 @@ class PostEntryManager:
         state = self._ensure_state(pos, db_row)
         # Build once to measure the excursion, then rebuild so the layers see
         # the updated MFE/MAE in the same pass.
-        self._update_excursions(self._build_context(pos, db_row, state), state)
+        self._update_excursions(
+            self._build_context(pos, db_row, state),
+            state,
+            profit_usd=float(pos.get("profit") or 0.0),
+        )
         ctx = self._build_context(pos, db_row, state)
 
         outcome = self._orchestrator.manage_open_trade(
