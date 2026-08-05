@@ -95,6 +95,27 @@ EXIT_SCORE_THRESHOLD = _f("TM_EXIT_SCORE_THRESHOLD", 0.75)
 
 # Component weights.
 #
+# IMPORTANT - how these behave when a component has no data:
+#
+# The scorer takes a weighted mean over the components that are actually
+# available, so a component with no data has its weight redistributed across
+# the rest rather than contributing a zero. Nothing is ever scored as "calm"
+# just because it could not be measured.
+#
+# This matters right now because the exit model is disabled, so `probability`
+# supplies no reading and drops out entirely. The effective split today is:
+#
+#     trend_reversal      0.2941 / 0.5294 = 55.55%
+#     momentum_weakness   0.2353 / 0.5294 = 44.45%
+#
+# The threshold still bites: two strong readings clear 0.75 (e.g. trend_score
+# 10 with momentum_score 15 scores 0.756), while neutral readings score 0.000.
+# See tests/test_exit_score_ml_disabled.py, which pins this behaviour.
+#
+# The nominal weight below is therefore left at its designed value: the moment
+# a valid model exists and is enabled, `probability` re-enters at 47.06% with
+# no config change.
+#
 # The original design allocated 15% to a "volume weakness" component. There is
 # no volume field that is present on every candle regardless of data path:
 # QuantDinger's indicator endpoint returns rsi/atr/macd/ma_trend/close only,

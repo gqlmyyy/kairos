@@ -4,6 +4,8 @@ Deliberately-deferred defects. Each entry names the exact location, what goes
 wrong, and why it was left alone. Nothing here is fixed by the trade-management
 rebuild; all of it predates that work.
 
+Planned follow-up work lives in `ROADMAP.md`.
+
 ---
 
 ## 1. `MAX_OPEN_TRADES = 3` is unreachable — the bot is effectively single-trade
@@ -101,7 +103,33 @@ accumulate over live trades before retraining.
 
 ---
 
-## 4. `config.py` crashes on an empty `MT5_LOGIN`
+## 4. Exit model probability is excluded, not defaulted — by design
+
+**Location:** `trade_management/layer2_exit_score.py`, `tm_config.py`
+
+**Not a defect**, recorded because the config is easy to misread. With the exit
+model disabled, `EXIT_WEIGHT_PROBABILITY = 0.4706` looks like 47% of the score
+is frozen at some constant. It is not: the scorer takes a weighted mean over
+*available* components, so `probability` drops out entirely and its weight
+redistributes.
+
+Effective split today:
+
+| Component | Nominal | Effective |
+|---|---|---|
+| `probability` | 0.4706 | excluded |
+| `trend_reversal` | 0.2941 | **55.55%** |
+| `momentum_weakness` | 0.2353 | **44.45%** |
+
+The 0.75 threshold stays meaningful: neutral readings score 0.000, and strong
+readings clear it short of the extremes (trend_score 10 with momentum_score 15
+scores 0.756). Pinned by `tests/test_exit_score_ml_disabled.py`.
+
+Re-enabling a valid model restores the 47.06% share with no config change.
+
+---
+
+## 5. `config.py` crashes on an empty `MT5_LOGIN` — operational risk
 
 **Location:** `config.py:30`
 
@@ -109,16 +137,30 @@ accumulate over live trades before retraining.
 MT5_LOGIN = int(os.getenv("MT5_LOGIN", "110609311"))
 ```
 
-**What happens:** the default only applies when the variable is *absent*. A
-present-but-empty `MT5_LOGIN=` in `.env` (the current state of the checked-in
-example) yields `int("")` and a `ValueError` at import time, so every entry point
-in the project fails before running.
+**What happens:** `os.getenv(name, default)` returns the default only when the
+variable is *absent*. A present-but-empty `MT5_LOGIN=` yields `int("")` and a
+`ValueError` **at import time**.
 
-**If fixing:** `int(os.getenv("MT5_LOGIN") or "110609311")`.
+**Why this is an operational risk, not a cosmetic bug:** `config.py` is imported
+by every entry point in the project — `main.py`, every script, every test. An
+empty value does not degrade one feature; it prevents the process from starting
+at all, before any logging is configured, with a bare `ValueError` traceback that
+does not name the variable.
+
+This is a live hazard: the `.env` currently on disk has `MT5_LOGIN=` empty.
+Deploying an empty or partially-filled `.env` — the normal outcome of copying
+`.env.example` — takes the whole bot down. It was hit during verification of
+this branch and had to be worked around with an environment override.
+
+**The same pattern affects every numeric setting read this way**, so check for
+others before fixing just this line.
+
+**If fixing:** `int(os.getenv("MT5_LOGIN") or "110609311")`, or a small helper
+that treats empty strings as absent for all numeric config reads.
 
 ---
 
-## 5. Duplicate `order_id` rows in `trades`
+## 6. Duplicate `order_id` rows in `trades`
 
 **Location:** `data/storage/database.py` — `trades` has no unique constraint on
 `order_id` (only `execution_dataset` does).
@@ -132,7 +174,7 @@ wrong row, and P&L aggregation double-counts.
 
 ---
 
-## 6. Two trades recorded with `stop_loss = 0`
+## 7. Two trades recorded with `stop_loss = 0`
 
 **Location:** rows `9519062040` and `9472909740` in `trades`
 
@@ -145,7 +187,7 @@ write path.
 
 ---
 
-## 7. `_feed_risk_governor` resolves volume from open trades only
+## 8. `_feed_risk_governor` resolves volume from open trades only
 
 **Location:** `execution/reconciliation.py:322-331`
 
