@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"import execution.reconciliation; import analysis.models.xgboost_exit_model; import data.storage.database; print\\(''All modules loaded successfully''\\)\")",
+      "Bash(ls -la \"f:/files \\(2\\)/google/botdd/trading_bot_v3/scripts/\")",
+      "Bash(python -m py_compile scripts/import_historical_trades.py)",
+      "Bash(python scripts/import_historical_trades.py)",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\(''trading_bot_v3.db''\\); c = conn.execute\\(''PRAGMA table_info\\(execution_dataset\\)''\\); print\\([r for r in c]\\)\")",
+      "Bash(python -c \"import sqlite3; conn = sqlite3.connect\\(''trading_bot_v3.db''\\); c = conn.execute\\(\"\"SELECT name FROM sqlite_master WHERE type=''table''\"\"\\); print\\([r[0] for r in c]\\)\")"
+    ]
+  }
+}

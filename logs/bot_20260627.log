@@ -1,0 +1,152 @@
+[2026-06-27 01:29:31] [INFO] [main] Trading Bot V3 starting...
+[2026-06-27 01:29:31] [INFO] [database] V3 Database initialized with all tables
+[2026-06-27 01:29:31] [INFO] [qd_client] Logged in to QuantDinger
+[2026-06-27 01:29:31] [INFO] [qd_client] MT5 connected
+[2026-06-27 01:29:31] [INFO] [main] MT5 connected
+[2026-06-27 01:29:31] [INFO] [telegram_bot] Telegram polling started
+[2026-06-27 01:29:31] [INFO] [telegram_bot] Telegram bot V3 started
+[2026-06-27 01:29:31] [INFO] [mt5_watchdog] MT5 watchdog started (V1 reconnect logic)
+[2026-06-27 01:29:31] [INFO] [reconciliation] Reconciliation loop started (every 60s)
+[2026-06-27 01:29:31] [INFO] [reconciliation] Reconciliation thread started
+[2026-06-27 01:29:32] [INFO] [main] ==================================================
+[2026-06-27 01:29:32] [INFO] [main] Cycle 1 at 01:29:32
+[2026-06-27 01:29:41] [INFO] [news_fetcher] Fetched 20 relevant news items
+[2026-06-27 01:29:41] [INFO] [main] Equity: 73875.60$ | News: 20
+[2026-06-27 01:29:41] [DEBUG] [hybrid_market_client] Fetching indicators for EURUSD (QuantDinger only)
+[2026-06-27 01:29:41] [DEBUG] [market_client] Candles EURUSD 4H: 100 bars ✓
+[2026-06-27 01:29:41] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for EURUSD
+[2026-06-27 01:29:41] [DEBUG] [hybrid_market_client] Fetching indicators for EURUSD (QuantDinger only)
+[2026-06-27 01:29:41] [DEBUG] [market_client] Candles EURUSD 4H: 100 bars ✓
+[2026-06-27 01:29:41] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for EURUSD
+[2026-06-27 01:29:41] [DEBUG] [hybrid_market_client] Fetching indicators for EURUSD (QuantDinger only)
+[2026-06-27 01:29:41] [DEBUG] [market_client] Candles EURUSD 4H: 100 bars ✓
+[2026-06-27 01:29:41] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for EURUSD
+[2026-06-27 01:29:41] [INFO] [market_snapshot_builder] [SNAPSHOT_BUILT] symbol=EURUSD tfs=H4,H1,M15
+[2026-06-27 01:29:41] [DEBUG] [hybrid_market_client] Fetching indicators for XAUUSD (QuantDinger only)
+[2026-06-27 01:29:42] [DEBUG] [market_client] Candles XAUUSD 4H: 100 bars ✓
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for XAUUSD
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] Fetching indicators for XAUUSD (QuantDinger only)
+[2026-06-27 01:29:42] [DEBUG] [market_client] Candles XAUUSD 4H: 100 bars ✓
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for XAUUSD
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] Fetching indicators for XAUUSD (QuantDinger only)
+[2026-06-27 01:29:42] [DEBUG] [market_client] Candles XAUUSD 4H: 100 bars ✓
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for XAUUSD
+[2026-06-27 01:29:42] [INFO] [market_snapshot_builder] [SNAPSHOT_BUILT] symbol=XAUUSD tfs=H4,H1,M15
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] Fetching indicators for GBPUSD (QuantDinger only)
+[2026-06-27 01:29:42] [DEBUG] [market_client] Candles GBPUSD 4H: 100 bars ✓
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for GBPUSD
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] Fetching indicators for GBPUSD (QuantDinger only)
+[2026-06-27 01:29:42] [DEBUG] [market_client] Candles GBPUSD 4H: 100 bars ✓
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for GBPUSD
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] Fetching indicators for GBPUSD (QuantDinger only)
+[2026-06-27 01:29:42] [DEBUG] [market_client] Candles GBPUSD 4H: 100 bars ✓
+[2026-06-27 01:29:42] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for GBPUSD
+[2026-06-27 01:29:42] [INFO] [market_snapshot_builder] [SNAPSHOT_BUILT] symbol=GBPUSD tfs=H4,H1,M15
+[2026-06-27 01:29:42] [INFO] [main] --- EURUSD ---
+[2026-06-27 01:29:47] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:29:51] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:29:55] [INFO] [deepseek] DEEPSEEK OK: {
+  "impact_score": 85,
+  "bias": "bearish",
+  "confidence": 0.8,
+  "reason": "تهديد ترامب بفرض رسوم...
+[2026-06-27 01:29:55] [INFO] [deepseek] AI EURUSD: bias=bearish impact=85.0 conf=0.80
+[2026-06-27 01:29:55] [INFO] [signal_engine] [VERIFY] SIGNAL_INPUT bias=bearish score=85.0 confidence=0.8
+[2026-06-27 01:29:55] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=confidence>=0.60 actual=0.8 result=True
+[2026-06-27 01:29:55] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=score>=55 actual=85.0 result=True
+[2026-06-27 01:29:55] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=bias in [bullish,bearish] actual=bearish result=True
+[2026-06-27 01:29:55] [INFO] [signal_engine] [VERIFY] SIGNAL_FINAL direction=SELL score=85.0 confidence=0.8 valid=True
+[2026-06-27 01:29:55] [DEBUG] [signal_engine] Signal: SELL score=85.0 conf=0.80 strength=قوي جداً valid=True
+[2026-06-27 01:29:55] [INFO] [sentiment] Sentiment EURUSD: bearish score=81 bull=3 bear=5
+[2026-06-27 01:29:55] [DEBUG] [mtf] MTF (snapshot) EURUSD: H4=bullish H1=bullish M15=bullish aligned=True (strong)
+[2026-06-27 01:29:55] [INFO] [main] [VERIFY][DATA_TRUTH] symbol=EURUSD timeframe=H4/H1/M15 news_fetched=True indicators_fetched=True live_data=True cached=False
+[2026-06-27 01:29:55] [INFO] [voting_engine] EURUSD: MTF strongly aligned, boosting score 10%
+[2026-06-27 01:29:55] [DEBUG] [hybrid_market_client] Fetching indicators for EURUSD (QuantDinger only)
+[2026-06-27 01:29:55] [DEBUG] [market_client] Candles EURUSD 4H: 100 bars ✓
+[2026-06-27 01:29:55] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for EURUSD
+[2026-06-27 01:29:55] [DEBUG] [hybrid_market_client] Fetching indicators for EURUSD (QuantDinger only)
+[2026-06-27 01:29:55] [DEBUG] [market_client] Using cached candles for EURUSD 4H (age: 0s)
+[2026-06-27 01:29:55] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for EURUSD
+[2026-06-27 01:29:55] [INFO] [sltp] SL/TP EURUSD: entry=1.1389521360397339 atr=0.00235 sl=1.13543 tp=1.14482
+[2026-06-27 01:29:55] [INFO] [position_sizing] Position size: 0.5 (equity=73876, risk=0.001, sl_dist=0.00352, score=60, cons_loss=0)
+[2026-06-27 01:29:56] [INFO] [xgboost_v2] [VERIFY] XGBOOST MODEL LOADED path=models/xgb_model.json available=True
+[2026-06-27 01:29:56] [INFO] [xgboost_v2] XGBoost v2 model loaded successfully
+[2026-06-27 01:29:56] [DEBUG] [xgboost_v2] V2 predict: rsi=65.2 atr=0.00235 regime=TRENDING session=new_york dir=BUY -> p_win=0.935
+[2026-06-27 01:29:56] [INFO] [xgboost_v2] [VERIFY] XGBOOST PREDICTION p_win=0.935 available=True
+[2026-06-27 01:29:56] [INFO] [main] [VERIFY][DECISION_TRUTH] bias=bearish score=60.2 confidence=0.634 vote=BUY risk_passed=True sl_tp_calculated=True position_size=0.5 xgboost_p_win=0.9349749088287354 final_decision_valid=True reject_reason=OK
+[2026-06-27 01:29:56] [INFO] [mt5_direct] [MT5_DIRECT] open_trade symbol=EURUSD direction=BUY volume=0.75 sl=1.13543 tp=1.14482
+[2026-06-27 01:29:56] [INFO] [mt5_direct] [MT5_DIRECT] terminal_info: TerminalInfo(community_account=True, community_connection=True, connected=True, dlls_allowed=False, trade_allowed=True, tradeapi_disabled=False, email_enabled=False, ftp_enabled=False, notifications_enabled=False, mqid=True, build=5836, maxbars=100000, codepage=0, ping_last=70069, community_balance=0.0, retransmission=0.0, company='MetaQuotes Ltd.', name='MetaTrader 5', language='English', path='C:\\Program Files\\MetaTrader 5', data_path='C:\\Users\\ACER\\AppData\\Roaming\\MetaQuotes\\Terminal\\D0E8209F77C8CF37AD8BF550E51FF075', commondata_path='C:\\Users\\ACER\\AppData\\Roaming\\MetaQuotes\\Terminal\\Common')
+[2026-06-27 01:29:56] [INFO] [mt5_direct] [MT5_DIRECT] account_info: AccountInfo(login=108132137, trade_mode=0, leverage=100, limit_orders=200, margin_so_mode=0, trade_allowed=True, trade_expert=True, margin_mode=2, currency_digits=2, fifo_close=False, balance=73875.6, credit=0.0, profit=0.0, equity=73875.6, margin=0.0, margin_free=73875.6, margin_level=0.0, margin_so_call=50.0, margin_so_so=30.0, margin_initial=0.0, margin_maintenance=0.0, assets=0.0, liabilities=0.0, commission_blocked=0.0, name='Ali Nabil', server='MetaQuotes-Demo', currency='USD', company='MetaQuotes Ltd.')
+[2026-06-27 01:29:56] [DEBUG] [mt5_direct] [MT5_DIRECT] order_send request={'action': 1, 'symbol': 'EURUSD', 'volume': 0.75, 'type': 0, 'price': 1.13875, 'sl': 1.13543, 'tp': 1.14482, 'deviation': 20, 'magic': 0, 'comment': 'Bot V3', 'type_filling': 1}
+[2026-06-27 01:29:56] [ERROR] [mt5_direct] [MT5_DIRECT] order_send failed result=OrderSendResult(retcode=10030, deal=0, order=0, volume=0.0, price=0.0, bid=0.0, ask=0.0, comment='Unsupported filling mode', request_id=0, retcode_external=0, request=TradeRequest(action=1, magic=0, order=0, symbol='EURUSD', volume=0.75, price=1.13875, stoplimit=0.0, sl=1.13543, tp=1.14482, deviation=20, type=0, type_filling=1, type_time=0, expiration=0, comment='Bot V3', position=0, position_by=0)) comment=Unsupported filling mode retcode=10030
+[2026-06-27 01:29:56] [INFO] [mt5_direct] [MT5_DIRECT] Retry order_send without type_filling
+[2026-06-27 01:29:56] [INFO] [main] [VERIFY][EXECUTION_RESULT] symbol=EURUSD open_trade_result={'status': 'error', 'error': 'order_send failed (retry). comment=Market closed retcode=10018', 'order_id': None, 'price': None, 'symbol': 'EURUSD', 'direction': 'BUY', 'volume': 0.75, 'timestamp': 1782512996.1505866, 'raw_response': {'retcode': 10030, 'deal': 0, 'order': 0, 'volume': 0.0, 'price': 0.0, 'bid': 0.0, 'ask': 0.0, 'comment': 'Unsupported filling mode', 'request_id': 0, 'retcode_external': 0, 'request': TradeRequest(action=1, magic=0, order=0, symbol='EURUSD', volume=0.75, price=1.13875, stoplimit=0.0, sl=1.13543, tp=1.14482, deviation=20, type=0, type_filling=1, type_time=0, expiration=0, comment='Bot V3', position=0, position_by=0)}}
+[2026-06-27 01:29:56] [INFO] [main] --- XAUUSD ---
+[2026-06-27 01:30:00] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:30:05] [WARNING] [deepseek] Retry 2: JSON incomplete/truncated
+[2026-06-27 01:30:10] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:30:14] [INFO] [deepseek] DEEPSEEK OK: {
+  "impact_score": 75,
+  "bias": "bullish",
+  "confidence": 0.85,
+  "reason": "الاتجاه صاعد بقوة وا...
+[2026-06-27 01:30:14] [INFO] [deepseek] AI XAUUSD: bias=bullish impact=75.0 conf=0.85
+[2026-06-27 01:30:14] [INFO] [signal_engine] [VERIFY] SIGNAL_INPUT bias=bullish score=75.0 confidence=0.85
+[2026-06-27 01:30:14] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=confidence>=0.60 actual=0.85 result=True
+[2026-06-27 01:30:14] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=score>=55 actual=75.0 result=True
+[2026-06-27 01:30:14] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=bias in [bullish,bearish] actual=bullish result=True
+[2026-06-27 01:30:14] [INFO] [signal_engine] [VERIFY] SIGNAL_FINAL direction=BUY score=75.0 confidence=0.85 valid=True
+[2026-06-27 01:30:14] [DEBUG] [signal_engine] Signal: BUY score=75.0 conf=0.85 strength=قوي valid=True
+[2026-06-27 01:30:14] [INFO] [sentiment] Sentiment XAUUSD: bearish score=88 bull=1 bear=3
+[2026-06-27 01:30:14] [DEBUG] [mtf] MTF (snapshot) XAUUSD: H4=bullish H1=bullish M15=bullish aligned=True (strong)
+[2026-06-27 01:30:14] [INFO] [main] [VERIFY][DATA_TRUTH] symbol=XAUUSD timeframe=H4/H1/M15 news_fetched=True indicators_fetched=True live_data=True cached=False
+[2026-06-27 01:30:14] [INFO] [voting_engine] XAUUSD: MTF strongly aligned, boosting score 10%
+[2026-06-27 01:30:14] [DEBUG] [hybrid_market_client] Fetching indicators for XAUUSD (QuantDinger only)
+[2026-06-27 01:30:14] [DEBUG] [market_client] Candles XAUUSD 4H: 100 bars ✓
+[2026-06-27 01:30:14] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for XAUUSD
+[2026-06-27 01:30:14] [DEBUG] [hybrid_market_client] Fetching indicators for XAUUSD (QuantDinger only)
+[2026-06-27 01:30:14] [DEBUG] [market_client] Using cached candles for XAUUSD 4H (age: 0s)
+[2026-06-27 01:30:14] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for XAUUSD
+[2026-06-27 01:30:14] [INFO] [sltp] SL/TP XAUUSD: entry=4103.0 atr=39.82853 sl=4093.0 tp=4202.57132
+[2026-06-27 01:30:14] [INFO] [position_sizing] Position size: 0.1 (equity=73876, risk=0.003, sl_dist=10.00000, score=100, cons_loss=0)
+[2026-06-27 01:30:14] [DEBUG] [xgboost_v2] V2 predict: rsi=64.2 atr=39.82853 regime=TRENDING session=new_york dir=BUY -> p_win=0.220
+[2026-06-27 01:30:14] [INFO] [xgboost_v2] [VERIFY] XGBOOST PREDICTION p_win=0.220 available=True
+[2026-06-27 01:30:14] [INFO] [main] [VERIFY][DECISION_TRUTH] bias=bullish score=100 confidence=1.0 vote=BUY risk_passed=True sl_tp_calculated=True position_size=0.1 xgboost_p_win=0.21978099644184113 final_decision_valid=False reject_reason=p_win<threshold (p_win=0.220 threshold=0.6)
+[2026-06-27 01:30:14] [INFO] [main] --- GBPUSD ---
+[2026-06-27 01:30:19] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:30:24] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:30:29] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:30:34] [WARNING] [deepseek] Retry 2: JSON incomplete/truncated
+[2026-06-27 01:30:39] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:30:44] [WARNING] [deepseek] DeepSeek empty response
+[2026-06-27 01:30:44] [INFO] [signal_engine] [VERIFY] SIGNAL_INPUT bias=neutral score=0 confidence=0
+[2026-06-27 01:30:44] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=confidence>=0.60 actual=0 result=False
+[2026-06-27 01:30:44] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=score>=55 actual=0 result=False
+[2026-06-27 01:30:44] [INFO] [signal_engine] [VERIFY] SIGNAL_RULE rule=bias in [bullish,bearish] actual=neutral result=False
+[2026-06-27 01:30:44] [INFO] [signal_engine] [VERIFY] SIGNAL_FINAL direction=NEUTRAL score=0 confidence=0 valid=False
+[2026-06-27 01:30:44] [INFO] [signal_engine] [VERIFY] SIGNAL_FAILURE_REASONS
+[2026-06-27 01:30:44] [INFO] [signal_engine] * confidence below threshold
+[2026-06-27 01:30:44] [INFO] [signal_engine] * score below threshold
+[2026-06-27 01:30:44] [INFO] [signal_engine] * neutral bias
+[2026-06-27 01:30:44] [INFO] [signal_engine] [VERIFY] SIGNAL_FAILURE_LOCATION file=F:\files (2)\google\botdd\trading_bot_v3\decision\signal_engine.py function=generate_signal
+[2026-06-27 01:30:44] [DEBUG] [signal_engine] Signal: NEUTRAL score=0 conf=0.00 strength=ضعيف valid=False
+[2026-06-27 01:30:44] [INFO] [sentiment] Sentiment GBPUSD: neutral score=50 bull=1 bear=1
+[2026-06-27 01:30:44] [DEBUG] [mtf] MTF (snapshot) GBPUSD: H4=bullish H1=bullish M15=bullish aligned=True (strong)
+[2026-06-27 01:30:44] [INFO] [main] [VERIFY][DATA_TRUTH] symbol=GBPUSD timeframe=H4/H1/M15 news_fetched=True indicators_fetched=True live_data=True cached=False
+[2026-06-27 01:30:44] [INFO] [voting_engine] GBPUSD: MTF strongly aligned, boosting score 10%
+[2026-06-27 01:30:44] [INFO] [risk_engine] Risk: AI confidence too low (GBPUSD BUY) - AI confidence 0.00 < 0.6
+[2026-06-27 01:30:44] [DEBUG] [hybrid_market_client] Fetching indicators for GBPUSD (QuantDinger only)
+[2026-06-27 01:30:44] [DEBUG] [market_client] Candles GBPUSD 4H: 100 bars ✓
+[2026-06-27 01:30:44] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for GBPUSD
+[2026-06-27 01:30:44] [DEBUG] [hybrid_market_client] Fetching indicators for GBPUSD (QuantDinger only)
+[2026-06-27 01:30:44] [DEBUG] [market_client] Using cached candles for GBPUSD 4H (age: 0s)
+[2026-06-27 01:30:44] [DEBUG] [hybrid_market_client] ✓ Got live data from QuantDinger for GBPUSD
+[2026-06-27 01:30:44] [INFO] [sltp] SL/TP GBPUSD: entry=1.3198009729385376 atr=0.00270 sl=1.31574 tp=1.32656
+[2026-06-27 01:30:44] [INFO] [position_sizing] Position size: 0.5 (equity=73876, risk=0.001, sl_dist=0.00406, score=57, cons_loss=0)
+[2026-06-27 01:30:44] [DEBUG] [xgboost_v2] V2 predict: rsi=65.7 atr=0.00270 regime=TRENDING session=new_york dir=BUY -> p_win=0.866
+[2026-06-27 01:30:44] [INFO] [xgboost_v2] [VERIFY] XGBOOST PREDICTION p_win=0.866 available=True
+[2026-06-27 01:30:44] [INFO] [main] [VERIFY][DECISION_TRUTH] bias=neutral score=57.4 confidence=0.0 vote=BUY risk_passed=False sl_tp_calculated=True position_size=0.5 xgboost_p_win=0.8661466836929321 final_decision_valid=False reject_reason=AI confidence 0.00 < 0.6
+[2026-06-27 01:30:44] [INFO] [adaptive_weights] EURUSD weights updated: {'ai': 0.237, 'trend': 0.237, 'momentum': 0.237, 'sentiment': 0.237, 'volatility': 0.051} | WR=23.1% PF=0
+[2026-06-27 01:30:44] [INFO] [adaptive_weights] 🏆 أفضل زوج: EURUSD | WR=23.1% | PnL=190.0$
+[2026-06-27 01:30:44] [INFO] [adaptive_weights] ⚠️ أسوأ زوج: XAUUSD | WR=0.0% | PnL=0.0$
+[2026-06-27 01:30:44] [INFO] [main] Sleeping 1800s...

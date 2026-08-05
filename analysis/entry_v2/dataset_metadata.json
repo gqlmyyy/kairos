@@ -1,0 +1,5 @@
+{
+  "builder": "analysis/entry_v2/dataset_builder.py",
+  "note": "This file is a placeholder. Real metadata is exported by dataset_builder.build_dataset() into the output_dir as dataset_metadata.json (or dataset_metadata_<timestamp>.json if collision)."
+}
+

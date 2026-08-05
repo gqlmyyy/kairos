@@ -1,0 +1,20 @@
+{
+  "halted": false,
+  "halt_reason": "",
+  "halt_sources": [],
+  "halt_timestamp": null,
+  "cumulative_loss_r": 0.0,
+  "consecutive_losses": 2,
+  "daily_loss_usd": 0.0,
+  "date": "2026-08-05",
+  "recorded_order_ids": [
+    {
+      "id": "9870631053",
+      "ts": 1785913843.922048
+    },
+    {
+      "id": "9870630071",
+      "ts": 1785913843.922048
+    }
+  ]
+}

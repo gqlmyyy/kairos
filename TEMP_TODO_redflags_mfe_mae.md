@@ -1,0 +1,8 @@
+- Inspect current DB schema for execution_dataset
+- Add columns mfe, mae if missing (safe ALTER TABLE)
+- Add DB helpers:
+  - update_execution_mfe_mae(order_id, mfe, mae)
+- Update PositionStateMachine.derive_state to set mfe/mae from db_row
+- Update PostEntryManager to initialize state from db_row (already does derive_state)
+- Update XGBoostExitModelAdapter.update_mfe_mae to persist mfe/mae to DB
+- Add/adjust tests if needed (mocked update_mfe_mae persistence)

@@ -1,0 +1,605 @@
+{
+  "version": 2,
+  "feature_schema": {
+    "identifiers": [
+      "t",
+      "symbol"
+    ],
+    "feature_order": [
+      "h4_rsi_14",
+      "h4_atr_14",
+      "h4_adx_14",
+      "h4_macd",
+      "h4_macd_signal",
+      "h4_macd_hist",
+      "h4_ema_12",
+      "h4_ema_26",
+      "h4_ema_50",
+      "h4_sma_20",
+      "h4_sma_50",
+      "h4_sma_200",
+      "h4_momentum",
+      "h4_cci_20",
+      "h4_stoch_k_14",
+      "h4_stoch_d_14",
+      "h4_bollinger_width_20",
+      "h1_rsi_14",
+      "h1_atr_14",
+      "h1_adx_14",
+      "h1_macd",
+      "h1_macd_signal",
+      "h1_macd_hist",
+      "h1_ema_12",
+      "h1_ema_26",
+      "h1_ema_50",
+      "h1_sma_20",
+      "h1_sma_50",
+      "h1_sma_200",
+      "h1_momentum",
+      "h1_cci_20",
+      "h1_stoch_k_14",
+      "h1_stoch_d_14",
+      "h1_bollinger_width_20",
+      "lag1_rsi_14",
+      "lag2_rsi_14",
+      "lag3_rsi_14",
+      "lag1_atr_14",
+      "lag2_atr_14",
+      "lag3_atr_14",
+      "lag1_adx_14",
+      "lag2_adx_14",
+      "lag3_adx_14",
+      "lag1_macd",
+      "lag2_macd",
+      "lag3_macd",
+      "lag1_momentum",
+      "lag2_momentum",
+      "lag3_momentum",
+      "delta_rsi_14",
+      "delta_atr_14",
+      "delta_adx_14",
+      "delta_macd",
+      "delta_momentum",
+      "rsi_x_adx",
+      "atr_x_trend",
+      "macd_x_momentum",
+      "rsi_x_atr",
+      "trend_x_session",
+      "volatility_x_momentum",
+      "trend_agree_h4_h1",
+      "day_of_week",
+      "hour",
+      "session_encoded",
+      "symbol_encoded"
+    ],
+    "features": [
+      {
+        "feature_name": "h4_rsi_14",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_atr_14",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_adx_14",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_macd",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_macd_signal",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_macd_hist",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_ema_12",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_ema_26",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_ema_50",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_sma_20",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_sma_50",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_sma_200",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_momentum",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_cci_20",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_stoch_k_14",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_stoch_d_14",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h4_bollinger_width_20",
+        "dtype": "float",
+        "source_timeframe": "H4",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_rsi_14",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_atr_14",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_adx_14",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_macd",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_macd_signal",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_macd_hist",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_ema_12",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_ema_26",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_ema_50",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_sma_20",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_sma_50",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_sma_200",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_momentum",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_cci_20",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_stoch_k_14",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_stoch_d_14",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "h1_bollinger_width_20",
+        "dtype": "float",
+        "source_timeframe": "H1",
+        "lag": 0,
+        "interaction": false,
+        "description": "Entry indicator feature"
+      },
+      {
+        "feature_name": "lag1_rsi_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 1,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag2_rsi_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 2,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag3_rsi_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 3,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag1_atr_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 1,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag2_atr_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 2,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag3_atr_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 3,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag1_adx_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 1,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag2_adx_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 2,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag3_adx_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 3,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag1_macd",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 1,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag2_macd",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 2,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag3_macd",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 3,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag1_momentum",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 1,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag2_momentum",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 2,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "lag3_momentum",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 3,
+        "interaction": false,
+        "description": "Lagged indicator feature"
+      },
+      {
+        "feature_name": "delta_rsi_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": false,
+        "description": "Delta feature"
+      },
+      {
+        "feature_name": "delta_atr_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": false,
+        "description": "Delta feature"
+      },
+      {
+        "feature_name": "delta_adx_14",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": false,
+        "description": "Delta feature"
+      },
+      {
+        "feature_name": "delta_macd",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": false,
+        "description": "Delta feature"
+      },
+      {
+        "feature_name": "delta_momentum",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": false,
+        "description": "Delta feature"
+      },
+      {
+        "feature_name": "rsi_x_adx",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": true,
+        "description": "Interaction feature"
+      },
+      {
+        "feature_name": "atr_x_trend",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": true,
+        "description": "Interaction feature"
+      },
+      {
+        "feature_name": "macd_x_momentum",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": true,
+        "description": "Interaction feature"
+      },
+      {
+        "feature_name": "rsi_x_atr",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": true,
+        "description": "Interaction feature"
+      },
+      {
+        "feature_name": "trend_x_session",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": true,
+        "description": "Interaction feature"
+      },
+      {
+        "feature_name": "volatility_x_momentum",
+        "dtype": "float",
+        "source_timeframe": "M15",
+        "lag": 0,
+        "interaction": true,
+        "description": "Interaction feature"
+      },
+      {
+        "feature_name": "trend_agree_h4_h1",
+        "dtype": "float",
+        "source_timeframe": "MULTI",
+        "lag": 0,
+        "interaction": true,
+        "description": "Multi-timeframe agreement feature"
+      },
+      {
+        "feature_name": "day_of_week",
+        "dtype": "float",
+        "source_timeframe": "TIME",
+        "lag": 0,
+        "interaction": false,
+        "description": "Time feature"
+      },
+      {
+        "feature_name": "hour",
+        "dtype": "float",
+        "source_timeframe": "TIME",
+        "lag": 0,
+        "interaction": false,
+        "description": "Time feature"
+      },
+      {
+        "feature_name": "session_encoded",
+        "dtype": "float",
+        "source_timeframe": "TIME",
+        "lag": 0,
+        "interaction": false,
+        "description": "Time feature"
+      },
+      {
+        "feature_name": "symbol_encoded",
+        "dtype": "float",
+        "source_timeframe": "SYMBOL",
+        "lag": 0,
+        "interaction": false,
+        "description": "Symbol encoding"
+      }
+    ]
+  },
+  "validation": {
+    "rows": 24851,
+    "duplicate_rows": false,
+    "duplicate_symbol_t": false,
+    "no_nan": true,
+    "no_inf": true
+  }
+}
