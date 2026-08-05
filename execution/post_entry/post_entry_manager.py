@@ -1,72 +1,78 @@
+"""Post-entry manager - the loop that drives trade management.
+
+Deliberately thin. It gathers facts (MT5 positions, DB rows, market readings),
+builds a TradeContext, hands it to the trade_management orchestrator, and
+executes whatever the orchestrator decided. It contains no decision logic of
+its own — the previous generation embedded emergency-stop rules directly here,
+which made them untestable and invisible to the layer ordering.
+
+Responsibilities:
+  - discover open positions and track their lifecycle
+  - assemble the inputs each layer needs
+  - execute close / partial-close / modify
+  - publish events and persist state
+"""
+
 from __future__ import annotations
 
-import time
 import threading
+import time
+from typing import Any, Dict, List, Optional
 
-from typing import Any, Dict, Optional, List
-
-# استيراد الإعدادات – تأكد من وجود ملف config.py
 from config import POST_ENTRY_LOOP_INTERVAL_SEC
-
-from execution.risk_management.market_regime_detector import (
-    detect_market_regime,
-    get_regime_settings,
-)
-from utils.logger import get_logger
-from data.storage.database import get_execution_dataset, close_trade_db_by_order_id
 from core.heartbeat import beat
+from data.storage.database import (
+    close_trade_db_by_order_id,
+    get_execution_dataset,
+    update_execution_mfe_mae,
+)
+from trade_management import TradeContext, TradeManagementOrchestrator
+from trade_management.layer1_intrabar import bars_since
+from trade_management.layer1_risk_governor_gate import record_closed_trade
+from utils.logger import get_logger
 
-from .trade_monitor import TradeMonitor
-from .market_snapshot_builder import MarketSnapshotBuilder
-from .position_state_machine import PositionStateMachine, PositionState
-from .rules.rule_engine import RuleEngine
-from .red_flags.red_flag_detector import RedFlagDetector
-from .xgboost_exit_model_adapter import XGBoostExitModelAdapter
-from config import ML_EXIT_ENABLED
-from risk.risk_governor import get_risk_governor
-from risk.r_multiple import calculate_risk_amount_usd
-from .decision_fusion import DecisionFusionEngine
 from .action_executor import ActionExecutor
 from .event_bus import DedupEventBus
-from .events import TradeClosedEvent, SLModifiedEvent
-from .event_listeners.logger_listener import LoggerListener
 from .event_listeners.database_listener import DatabaseListener
+from .event_listeners.logger_listener import LoggerListener
 from .event_listeners.telegram_listener import TelegramListener
-from .performance_recorder import PerformanceRecorder
+from .events import SLModifiedEvent, TradeClosedEvent
 from .ml_dataset_builder import MLDatasetBuilder
-
-logger = get_logger("post_entry_manager")
-
-# حماية وقف الخسارة الطارئ (مستقل عن النموذج)
-# الوحدة: price distance (نفس وحدة SL/TP في sltp.py)
-# الغرض: طبقة حماية احتياطية في حال فشل SL عند البروكر
-# القيمة: 1.3× من SL الفعلي للصفقة (أوسع من SL الأساسي)
-EMERGENCY_STOP_MULTIPLIER = 1.3  # أوسع من SL الأساسي
-TRADE_HEALTH_EMERGENCY_THRESHOLD = 20.0
+from .performance_recorder import PerformanceRecorder
+from .trade_monitor import TradeMonitor
 
 try:
     import MetaTrader5 as mt5  # type: ignore
 except Exception:
     mt5 = None
 
+logger = get_logger("post_entry_manager")
+
+
+class TradeRuntimeState:
+    """Per-trade state the layers need but MT5 does not carry."""
+
+    def __init__(self, initial_volume: float, profile: str, settings: Dict[str, Any]) -> None:
+        self.initial_volume = initial_volume
+        self.profile = profile
+        self.settings = settings
+        self.breakeven_done = False
+        self.partial_levels_done: set = set()
+        self.mfe_r = 0.0
+        self.mae_r = 0.0
+
 
 class PostEntryManager:
-    def __init__(self, loop_interval_sec: float = None) -> None:
-        if loop_interval_sec is None:
-            loop_interval_sec = POST_ENTRY_LOOP_INTERVAL_SEC
-        self._interval = float(loop_interval_sec)
+    def __init__(self, loop_interval_sec: Optional[float] = None) -> None:
+        self._interval = float(
+            loop_interval_sec if loop_interval_sec is not None else POST_ENTRY_LOOP_INTERVAL_SEC
+        )
 
-        self._trade_monitor = TradeMonitor()
-        self._snapshot_builder = MarketSnapshotBuilder()
-        self._state_machine = PositionStateMachine()
-        self._rule_engine = RuleEngine()
-        self._red_flags = RedFlagDetector()
-        self._xgb_adapter = XGBoostExitModelAdapter()
-        self._fusion = DecisionFusionEngine()
+        self._monitor = TradeMonitor()
         self._executor = ActionExecutor()
+        self._orchestrator = TradeManagementOrchestrator()
 
         self._bus = DedupEventBus(ttl_sec=30.0)
-        # المسجلات
         self._bus.register("SLModified", LoggerListener())
         self._bus.register("TradeClosed", LoggerListener())
         self._bus.register("TradeClosed", DatabaseListener())
@@ -75,518 +81,318 @@ class PostEntryManager:
         self._perf_recorder = PerformanceRecorder()
         self._ml_builder = MLDatasetBuilder()
 
-        # سجل الصفقات النشطة: ticket -> PositionState
-        self._active_positions: Dict[int, PositionState] = {}
-        
-        # Grace period for new positions (avoid race conditions)
-        # ticket -> timestamp when position was first detected
-        self._new_position_grace_sec: Dict[int, float] = {}
+        self._state: Dict[str, TradeRuntimeState] = {}
 
-    def _compute_risk_amount_usd(self, order_id: str, pos: Dict[str, Any], db_row: Dict[str, Any] = None) -> float:
-        """Compute risk_amount_usd for a trade using the shared R-multiple module."""
+    # ------------------------------------------------------------- context
+    def _symbol_meta(self, symbol: str) -> Dict[str, float]:
+        """Point size and broker stop level, needed by the modify filter."""
+        meta = {"point": 0.00001, "stop_level": 0.0}
+        if mt5 is None:
+            return meta
         try:
-            symbol = str(pos.get("symbol") or "")
-            if not symbol:
-                return None
-            row = db_row
-            if row is None:
-                try:
-                    from data.storage.database import get_execution_dataset
-                    row = get_execution_dataset(order_id) or {}
-                except Exception:
-                    row = {}
-            expected_entry = row.get("expected_entry")
-            expected_sl = row.get("expected_sl")
-            if not expected_entry or not expected_sl:
-                return None
-            trade_size = None
+            info = mt5.symbol_info(symbol)
+            if info is not None:
+                meta["point"] = float(getattr(info, "point", 0.00001) or 0.00001)
+                meta["stop_level"] = float(getattr(info, "trade_stops_level", 0) or 0)
+        except Exception as exc:
+            logger.warning("[POST_ENTRY] symbol_info failed for %s: %s", symbol, exc)
+        return meta
+
+    def _ensure_state(self, pos: Dict[str, Any], db_row: Dict[str, Any]) -> TradeRuntimeState:
+        order_id = str(pos.get("order_id"))
+        state = self._state.get(order_id)
+        if state is not None:
+            return state
+
+        db_row = db_row or {}
+        profile, settings = self._orchestrator.resolve_profile(
+            stored_profile=db_row.get("entry_profile"),
+            regime=db_row.get("expected_market_regime"),
+            mtf_aligned=None,
+            trend_strength=db_row.get("expected_trend_strength"),
+        )
+
+        # Original volume: prefer the DB record, fall back to what is open now.
+        initial_volume = float(db_row.get("expected_volume") or pos.get("volume") or 0.0)
+
+        state = TradeRuntimeState(initial_volume, profile, settings)
+        state.breakeven_done = bool(db_row.get("breakeven_done") or 0)
+        self._state[order_id] = state
+        logger.info(
+            "[POST_ENTRY] registered ticket=%s symbol=%s profile=%s initial_volume=%.2f",
+            order_id, pos.get("symbol"), profile, initial_volume,
+        )
+        return state
+
+    def _build_context(
+        self, pos: Dict[str, Any], db_row: Dict[str, Any], state: TradeRuntimeState
+    ) -> TradeContext:
+        symbol = str(pos.get("symbol") or "")
+        meta = self._symbol_meta(symbol)
+
+        entry_price = float(pos.get("entry_price") or 0.0)
+        initial_sl = float(db_row.get("expected_sl") or 0.0) or float(pos.get("sl") or 0.0)
+        r_distance = abs(entry_price - initial_sl) if initial_sl else 0.0
+
+        atr_at_entry = float(db_row.get("expected_atr") or 0.0)
+        atr_now = self._current_atr(symbol) or atr_at_entry
+
+        return TradeContext(
+            order_id=str(pos.get("order_id")),
+            symbol=symbol,
+            direction=str(pos.get("direction") or ""),
+            entry_price=entry_price,
+            current_price=float(pos.get("price_current") or 0.0),
+            volume=float(pos.get("volume") or 0.0),
+            initial_volume=state.initial_volume or float(pos.get("volume") or 0.0),
+            sl=float(pos.get("sl") or 0.0),
+            tp=pos.get("tp"),
+            initial_sl=initial_sl,
+            r_distance=r_distance,
+            atr_now=atr_now,
+            atr_at_entry=atr_at_entry,
+            trend_strength=float(db_row.get("expected_trend_strength") or 50.0),
+            regime=str(db_row.get("expected_market_regime") or "unknown"),
+            point_size=meta["point"],
+            broker_stop_level_points=meta["stop_level"],
+            bars_open=bars_since(pos.get("time_open"), time.time()),
+            profile=state.profile,
+            mfe_r=state.mfe_r,
+            mae_r=state.mae_r,
+            breakeven_done=state.breakeven_done,
+            partial_levels_done=tuple(sorted(state.partial_levels_done)),
+            extras={"db_row": db_row},
+        )
+
+    @staticmethod
+    def _current_atr(symbol: str) -> float:
+        try:
+            from data.market.hybrid_client import get_atr_hybrid
+
+            return float(get_atr_hybrid(symbol, timeframe="H1") or 0.0)
+        except Exception as exc:
+            logger.warning("[POST_ENTRY] ATR fetch failed for %s: %s", symbol, exc)
+            return 0.0
+
+    @staticmethod
+    def _market_readings(ctx: TradeContext) -> Dict[str, Any]:
+        """Trend/momentum readings for the Exit Score."""
+        readings: Dict[str, Any] = {}
+        try:
+            from data.market.hybrid_client import get_indicators_hybrid
+
+            indicators = get_indicators_hybrid(ctx.symbol, timeframe="H1") or {}
+            rsi = indicators.get("rsi")
+            if rsi is not None:
+                # RSI doubles as a directional momentum proxy on a 0..100 scale.
+                readings["momentum_score"] = float(rsi)
+
+            trend_map = {
+                "strong uptrend": 85.0, "uptrend": 65.0, "sideways": 50.0,
+                "downtrend": 35.0, "strong downtrend": 15.0,
+            }
+            ma_trend = str(indicators.get("ma_trend") or "").lower()
+            if ma_trend in trend_map:
+                readings["trend_score"] = trend_map[ma_trend]
+        except Exception as exc:
+            logger.warning("[POST_ENTRY] readings unavailable for %s: %s", ctx.symbol, exc)
+        return readings
+
+    def _update_excursions(self, ctx: TradeContext, state: TradeRuntimeState) -> None:
+        """Track MFE/MAE in R and persist them for the exit-model dataset."""
+        profit_r = ctx.profit_r
+        changed = False
+        if profit_r > state.mfe_r:
+            state.mfe_r = profit_r
+            changed = True
+        if profit_r < state.mae_r:
+            state.mae_r = profit_r
+            changed = True
+        if changed:
             try:
-                trade_size = float(pos.get("volume") or pos.get("size") or 0)
-            except Exception:
-                pass
-            if not trade_size or trade_size <= 0:
-                try:
-                    from data.storage.database import get_open_trades
-                    open_trades = get_open_trades() or []
-                    for t in open_trades:
-                        if str(t.get("order_id", "")) == str(order_id):
-                            trade_size = float(t.get("size", 0) or 0)
-                            break
-                except Exception:
-                    pass
-            if not trade_size or trade_size <= 0:
+                update_execution_mfe_mae(ctx.order_id, state.mfe_r, state.mae_r)
+            except Exception as exc:
+                logger.warning("[POST_ENTRY] mfe/mae persist failed %s: %s", ctx.order_id, exc)
+
+    # -------------------------------------------------------------- actions
+    def _risk_amount_usd(self, ctx: TradeContext) -> Optional[float]:
+        try:
+            from risk.r_multiple import calculate_risk_amount_usd
+
+            if ctx.r_distance <= 0 or ctx.volume <= 0:
                 return None
-            sl_distance = abs(float(expected_entry) - float(expected_sl))
-            return calculate_risk_amount_usd(sl_distance, symbol, trade_size)
+            return calculate_risk_amount_usd(ctx.r_distance, ctx.symbol, ctx.volume)
         except Exception:
             return None
 
-    def _sync_db_context(self, positions: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """بناء خريطة order_id -> سجل قاعدة البيانات للصفقات المفتوحة (من MT5)."""
-        ctx: Dict[str, Dict[str, Any]] = {}
-        for pos in positions:
-            order_id = str(pos.get("order_id") or "")
-            if order_id:
-                try:
-                    row = get_execution_dataset(order_id)
-                    if row:
-                        ctx[order_id] = row
-                except Exception:
-                    pass
-        return ctx
+    def _finalise_close(self, ctx: TradeContext, pos: Dict[str, Any], reasons: List[str]) -> None:
+        pnl = float(pos.get("profit") or 0.0)
+        record_closed_trade(ctx.order_id, pnl, self._risk_amount_usd(ctx))
 
+        exit_reason = ";".join(reasons) if reasons else "trade_management"
+        payload = {
+            "order_id": ctx.order_id,
+            "symbol": ctx.symbol,
+            "direction": ctx.direction,
+            "pnl": pnl,
+            "exit_reason": exit_reason,
+            "entry": ctx.entry_price,
+            "exit_price": ctx.current_price,
+        }
+        self._bus.publish(
+            TradeClosedEvent(
+                order_id=ctx.order_id,
+                symbol=ctx.symbol,
+                direction=ctx.direction,
+                pnl=pnl,
+                exit_reason=exit_reason,
+                decision_score=None,
+                rule_score=None,
+                model_score=None,
+                confidence=None,
+                ts=time.time(),
+            ).to_event()
+        )
+
+        try:
+            close_trade_db_by_order_id(order_id=ctx.order_id, pnl=pnl)
+        except Exception as exc:
+            logger.error("[POST_ENTRY] close_trade_db failed %s: %s", ctx.order_id, exc)
+
+        self._perf_recorder.record_on_close(payload)
+        self._ml_builder.on_trade_closed(payload)
+        self._forget(ctx.order_id)
+
+    def _forget(self, order_id: str) -> None:
+        self._state.pop(str(order_id), None)
+        self._orchestrator.forget_trade(str(order_id))
+
+    # ----------------------------------------------------------------- loop
     def run_once(self) -> None:
-        beat()  # نبض القلب من core.heartbeat
+        beat()
 
-        # جلب جميع الصفقات المفتوحة من MT5 (مصدر الحقيقة)
-        positions = self._trade_monitor.get_open_positions()
+        positions = self._monitor.get_open_positions()
         if not positions:
             return
 
-        # استخراج التذاكر الحالية من MT5
-        current_tickets: set = set()
-        for pos in positions:
-            ticket = pos.get("order_id")
-            if ticket:
-                try:
-                    current_tickets.add(int(ticket))
-                except (ValueError, TypeError):
-                    pass
+        live_ids = {str(p.get("order_id")) for p in positions if p.get("order_id")}
+        for gone in set(self._state) - live_ids:
+            logger.info("[POST_ENTRY] position closed externally ticket=%s", gone)
+            self._forget(gone)
 
-        registry_tickets = set(self._active_positions.keys())
-        new_tickets = current_tickets - registry_tickets
-        closed_tickets = registry_tickets - current_tickets
-
-        # معالجة الصفقات المغلقة
-        for ticket in closed_tickets:
-            state = self._active_positions.pop(ticket, None)
-            if state:
-                self._snapshot_builder.invalidate_cache(ticket)
-                logger.info(f"[POST_ENTRY] Position closed ticket={ticket}")
-
-        # تسجيل الصفقات الجديدة
-        for pos in positions:
-            ticket = pos.get("order_id")
-            if ticket:
-                try:
-                    t = int(ticket)
-                except (ValueError, TypeError):
-                    continue
-                if t in new_tickets:
-                    logger.info(
-                        f"[POST_ENTRY] New position detected ticket={t} symbol={pos.get('symbol')}"
-                    )
-
-        # مزامنة سياق قاعدة البيانات لكل الصفقات الحالية
-        db_ctx = self._sync_db_context(positions)
-
-        # معالجة كل صفقة
         for pos in positions:
             order_id = str(pos.get("order_id") or "")
             if not order_id:
                 continue
-
-            # -----------------------------
-            # وقف الخسارة الطارئ (مستقل عن النموذج) – بناءً على SL الفعلي
-            # -----------------------------
-            # الغرض: طبقة حماية احتياطية في حال فشل SL عند البروكر
-            # المنطق: أغلق الصفقة فقط إذا تجاوزت الخسارة SL الفعلي × EMERGENCY_STOP_MULTIPLIER
             try:
-                symbol = pos.get("symbol")
-                direction = pos.get("direction") or pos.get("type")
-                entry_price = pos.get("entry_price") or pos.get("price_open") or pos.get("entryPrice")
-                current_price = pos.get("price_current") or pos.get("price") or pos.get("price_current")
-                actual_sl = pos.get("sl")  # SL الفعلي من MT5
-                
-                if symbol and entry_price is not None and current_price is not None and actual_sl is not None:
-                    entry_price_f = float(entry_price)
-                    current_price_f = float(current_price)
-                    actual_sl_f = float(actual_sl)
-                    
-                    # حساب المسافة المالية من SL الفعلي
-                    if str(direction).lower() in ["buy", "0"]:
-                        sl_distance = entry_price_f - actual_sl_f  # كم يبعد SL عنEntry
-                        current_loss = entry_price_f - current_price_f  # الخسارة الحالية
-                    else:
-                        sl_distance = actual_sl_f - entry_price_f
-                        current_loss = current_price_f - entry_price_f
-                    
-                    # تحقق من أن SL صحيح (ليس صفر)
-                    if sl_distance > 0:
-                        # EMERGENCY_STOP يطلق فقط إذا تجاوزت الخسارة SL × multiplier
-                        emergency_threshold = sl_distance * EMERGENCY_STOP_MULTIPLIER
-                        
-                        if current_loss >= emergency_threshold:
-                            logger.critical(
-                                f"[EMERGENCY_STOP] Closing ticket={order_id} symbol={symbol} dir={direction} "
-                                f"entry={entry_price_f} current={current_price_f} sl={actual_sl_f} "
-                                f"current_loss={current_loss:.5f} threshold={emergency_threshold:.5f} "
-                                f"(sl_distance={sl_distance:.5f} × {EMERGENCY_STOP_MULTIPLIER})"
-                            )
-                            ok = self._executor.close_position(order_id)
-                            if ok:
-                                # Feed Risk Governor (dedup by order_id)
-                                try:
-                                    _risk_amt = self._compute_risk_amount_usd(order_id, pos, db_ctx.get(order_id))
-                                    get_risk_governor().record_trade_close(
-                                        pnl_usd=float(pos.get("profit") or 0),
-                                        risk_amount_usd=_risk_amt,
-                                        order_id=order_id,
-                                    )
-                                except Exception:
-                                    pass
-                                payload = {
-                                    "order_id": order_id,
-                                    "symbol": symbol,
-                                    "direction": pos.get("direction"),
-                                    "pnl": float(pos.get("profit") or 0),
-                                    "exit_reason": "emergency_stop_loss",
-                                    "decision_score": None,
-                                    "rule_score": None,
-                                    "model_score": None,
-                                    "confidence": None,
-                                    "entry": entry_price_f,
-                                    "exit_price": current_price_f,
-                                }
-                                evt = TradeClosedEvent(
-                                    order_id=order_id,
-                                    symbol=str(symbol),
-                                    direction=str(pos.get("direction") or direction),
-                                    pnl=float(payload["pnl"]),
-                                    exit_reason=str(payload["exit_reason"]),
-                                    decision_score=payload.get("decision_score"),
-                                    rule_score=payload.get("rule_score"),
-                                    model_score=payload.get("model_score"),
-                                    confidence=payload.get("confidence"),
-                                    ts=time.time(),
-                                ).to_event()
-                                self._bus.publish(evt)
-                                try:
-                                    close_trade_db_by_order_id(order_id=order_id, pnl=float(pos.get("profit") or 0))
-                                except Exception as e:
-                                    logger.error(f"[EMERGENCY_STOP] close_trade_db_by_order_id failed order_id={order_id}: {e}")
-
-                                try:
-                                    ticket_int = int(order_id)
-                                    self._active_positions.pop(ticket_int, None)
-                                except Exception:
-                                    pass
-
-                                self._snapshot_builder.invalidate_cache(int(order_id) if str(order_id).isdigit() else order_id)
-                            continue
-            except Exception as e:
+                self._manage_one(order_id, pos)
+            except Exception:
                 import traceback
-                logger.error(f"[EMERGENCY_STOP] precheck failed order_id={order_id}: {traceback.format_exc()}")
 
-
-            try:
-                ticket = int(order_id)
-                if ticket not in self._active_positions:
-                    self._active_positions[ticket] = PositionState(
-                        state="NEW",
-                        be_done=False,
-                        partial_done=False,
-                        trailing_active=False,
-                        profit_locked=False,
-                    )
-
-                state = self._active_positions[ticket]
-
-                logger.info(f"[POST_ENTRY] Monitoring ticket={ticket}")
-
-                db_row = db_ctx.get(order_id)
-                derived_state = self._state_machine.derive_state(
-                    {"trade": pos}, db_row=db_row
-                )
-                state.state = derived_state.state
-                state.be_done = derived_state.be_done
-
-                # فحص طارئ: إذا كان trade_health (من p_win) أقل من الحد، أغلق فوراً
-                try:
-                    maybe_p_win = None
-                    if db_row:
-                        maybe_p_win = db_row.get("p_win") or db_row.get("expected_p_win")
-                    if maybe_p_win is not None:
-                        p_win_f = float(maybe_p_win)
-                        health_score = p_win_f * 100.0
-                        if health_score < TRADE_HEALTH_EMERGENCY_THRESHOLD:
-                            logger.critical(
-                                f"[EMERGENCY_STOP] Closing ticket={order_id} trade_health={health_score} "
-                                f"(p_win={p_win_f}) threshold={TRADE_HEALTH_EMERGENCY_THRESHOLD}"
-                            )
-                            ok = self._executor.close_position(order_id)
-                            if ok:
-                                # Feed Risk Governor (dedup by order_id)
-                                try:
-                                    _risk_amt = self._compute_risk_amount_usd(order_id, pos, db_ctx.get(order_id))
-                                    get_risk_governor().record_trade_close(
-                                        pnl_usd=float(pos.get("profit") or 0),
-                                        risk_amount_usd=_risk_amt,
-                                        order_id=order_id,
-                                    )
-                                except Exception:
-                                    pass
-                                payload = {
-                                    "order_id": order_id,
-                                    "symbol": pos.get("symbol"),
-                                    "direction": pos.get("direction"),
-                                    "pnl": float(pos.get("profit") or 0),
-                                    "exit_reason": "emergency_stop_trade_health",
-                                    "decision_score": None,
-                                    "rule_score": None,
-                                    "model_score": None,
-                                    "confidence": None,
-                                    "entry": float(pos.get("entry_price") or 0),
-                                    "exit_price": float(pos.get("price_current") or 0),
-                                }
-                                evt = TradeClosedEvent(
-                                    order_id=order_id,
-                                    symbol=str(payload["symbol"]),
-                                    direction=str(payload["direction"]),
-                                    pnl=float(payload["pnl"]),
-                                    exit_reason=str(payload["exit_reason"]),
-                                    decision_score=payload.get("decision_score"),
-                                    rule_score=payload.get("rule_score"),
-                                    model_score=payload.get("model_score"),
-                                    confidence=payload.get("confidence"),
-                                    ts=time.time(),
-                                ).to_event()
-                                self._bus.publish(evt)
-                                try:
-                                    close_trade_db_by_order_id(order_id=order_id, pnl=float(pos.get("profit") or 0))
-                                except Exception as e:
-                                    logger.error(f"[EMERGENCY_STOP] close_trade_db_by_order_id failed order_id={order_id}: {e}")
-                                try:
-                                    self._active_positions.pop(int(order_id), None)
-                                except Exception:
-                                    pass
-                                continue
-                except Exception as e:
-                    logger.error(f"[EMERGENCY_STOP] trade_health precheck failed order_id={order_id}: {type(e).__name__}: {e}")
-
-                # الحفاظ على القيم المتراكمة للحالات الجزئية وقفل الربح (حتى تُضاف إلى قاعدة البيانات)
-                state.partial_done = state.partial_done or derived_state.partial_done
-                state.trailing_active = derived_state.trailing_active
-                state.profit_locked = state.profit_locked or derived_state.profit_locked
-
-                snapshot = self._snapshot_builder.build_snapshot(pos)
-                snapshot["expected_row"] = db_row or {}
-
-                regime = detect_market_regime(
-                    symbol=pos.get("symbol"),
-                    atr=pos.get("atr"),
-                )
-                snapshot["market_regime"] = regime
-                snapshot["regime_settings"] = get_regime_settings(regime)
-
-                rule_results = self._rule_engine.evaluate(snapshot, state.state)
-
-                # جسر: إدخال نتائج القواعد إلى RedFlagDetector
-                snapshot["_rule_results_by_name"] = {rr.rule_name: rr for rr in rule_results}
-
-                # تحديث MFE/MAE قبل RedFlagDetector
-                self._xgb_adapter.update_mfe_mae(
-                    position_state=state,
-                    current_profit=float(pos.get("profit") or 0),
+                logger.error(
+                    "[POST_ENTRY] per-position error ticket=%s: %s",
+                    order_id, traceback.format_exc(),
                 )
 
-                red_flags, _rf_score, _rf_meta = self._red_flags.detect(snapshot, position_state=state)
+    def _manage_one(self, order_id: str, pos: Dict[str, Any]) -> None:
+        try:
+            db_row = get_execution_dataset(order_id) or {}
+        except Exception as exc:
+            logger.warning("[POST_ENTRY] db row unavailable %s: %s", order_id, exc)
+            db_row = {}
 
-                snapshot["_red_flag_report"] = {
-                    "should_consult_exit_model": _rf_meta.get("should_consult_exit_model"),
-                    "flag_count": _rf_meta.get("flag_count"),
-                    "severity": _rf_meta.get("severity"),
-                    "triggered_flags": _rf_meta.get("triggered_flags"),
-                }
+        state = self._ensure_state(pos, db_row)
+        # Build once to measure the excursion, then rebuild so the layers see
+        # the updated MFE/MAE in the same pass.
+        self._update_excursions(self._build_context(pos, db_row, state), state)
+        ctx = self._build_context(pos, db_row, state)
 
-                # ============================================================
-                # AI/ML EXIT MODEL - DISABLED (ML_EXIT_ENABLED=False)
-                # ============================================================
-                # The XGBoost exit model is DISABLED until it proves
-                # out-of-sample performance (AUC/accuracy clearly above chance).
-                # When disabled, xgb is None so DecisionFusionEngine never
-                # consults the model and never closes based on model output.
-                # ============================================================
-                if ML_EXIT_ENABLED:
-                    xgb = self._xgb_adapter.predict(snapshot, position_state=state)
-                else:
-                    xgb = None
-                decision = self._fusion.fuse(rule_results, red_flags, xgb, snapshot)
+        outcome = self._orchestrator.manage_open_trade(
+            ctx,
+            settings=state.settings,
+            signal=self._latest_signal(ctx.symbol),
+            readings=self._market_readings(ctx),
+            exit_features=None,  # supplied once the exit model is enabled
+            is_new_candle=True,
+        )
 
+        if not outcome.has_action:
+            return
 
-                if decision.decision == "ClosePosition":
-                    ok = self._executor.close_position(order_id)
-                    if ok:
-                        # Feed Risk Governor (dedup by order_id)
-                        try:
-                            _risk_amt = self._compute_risk_amount_usd(order_id, pos, db_row)
-                            get_risk_governor().record_trade_close(
-                                pnl_usd=float(pos.get("profit") or 0),
-                                risk_amount_usd=_risk_amt,
-                                order_id=order_id,
-                            )
-                        except Exception:
-                            pass
-                        payload = {
-                            "order_id": order_id,
-                            "symbol": pos.get("symbol"),
-                            "direction": pos.get("direction"),
-                            "pnl": float(pos.get("profit") or 0),
-                            "exit_reason": ";".join(decision.reasons) if decision.reasons else "rule_close",
-                            "decision_score": decision.decision_score,
-                            "rule_score": decision.rule_score,
-                            "model_score": decision.model_score,
-                            "confidence": decision.confidence,
-                            "entry": float(pos.get("entry_price") or 0),
-                            "exit_price": float(pos.get("price_current") or 0),
-                        }
-                        evt = TradeClosedEvent(
-                            order_id=order_id,
-                            symbol=str(payload["symbol"]),
-                            direction=str(payload["direction"]),
-                            pnl=float(payload["pnl"]),
-                            exit_reason=str(payload["exit_reason"]),
-                            decision_score=payload.get("decision_score"),
-                            rule_score=payload.get("rule_score"),
-                            model_score=payload.get("model_score"),
-                            confidence=payload.get("confidence"),
+        if outcome.close_full:
+            if self._executor.close_position(order_id):
+                logger.info(
+                    "[POST_ENTRY] closed ticket=%s reasons=%s",
+                    order_id, ";".join(outcome.reasons),
+                )
+                self._finalise_close(ctx, pos, outcome.reasons)
+            return
+
+        if outcome.close_fraction > 0:
+            volume = ctx.initial_volume * outcome.close_fraction
+            if self._executor.partial_close(order_id, volume):
+                if outcome.partial_level_index is not None:
+                    state.partial_levels_done.add(outcome.partial_level_index)
+                logger.info(
+                    "[POST_ENTRY] partial close ticket=%s volume=%.2f level=%s",
+                    order_id, volume, outcome.partial_level_index,
+                )
+
+        if outcome.modify is not None:
+            req = outcome.modify
+            if self._executor.modify_sl_tp(
+                order_id=req.order_id,
+                symbol=req.symbol,
+                direction=req.direction,
+                new_sl=req.new_sl,
+                new_tp=req.new_tp,
+            ):
+                if any("breakeven" in r for r in req.reasons):
+                    state.breakeven_done = True
+                if req.new_sl is not None:
+                    self._bus.publish(
+                        SLModifiedEvent(
+                            ticket=order_id,
+                            symbol=req.symbol,
+                            direction=req.direction,
+                            old_sl=ctx.sl,
+                            new_sl=float(req.new_sl),
+                            entry_price=ctx.entry_price,
+                            reason=";".join(req.reasons) or "trade_management",
                             ts=time.time(),
                         ).to_event()
-                        self._bus.publish(evt)
-                        try:
-                            close_trade_db_by_order_id(
-                                order_id=order_id,
-                                pnl=float(pos.get("profit") or 0),
-                            )
-                        except Exception as e:
-                            logger.error(f"[POST_ENTRY] close_trade_db_by_order_id failed order_id={order_id}: {e}")
+                    )
 
-                        self._perf_recorder.record_on_close(payload)
-                        self._ml_builder.on_trade_closed(payload)
+    @staticmethod
+    def _latest_signal(symbol: str) -> Optional[Dict[str, Any]]:
+        """Most recent decision for this symbol, for the signal-flip check."""
+        try:
+            from data.storage.database import get_last_decisions
 
-                        self._active_positions.pop(ticket, None)
-                        self._snapshot_builder.invalidate_cache(ticket)
-
-                elif decision.decision == "MoveSL":
-                    try:
-                        trade = snapshot.get("trade", {}) if isinstance(snapshot, dict) else {}
-
-                        # جمع جميع مقترحات MoveSL من كل القاعدة في هذه الدورة
-                        move_sl_proposals: List[tuple[str, Optional[float]]] = []
-                        for rr in rule_results:
-                            rr_name = getattr(rr, "rule_name", rr.__class__.__name__)
-                            for sa in getattr(rr, "suggested_actions", []) or []:
-                                if getattr(sa, "action_type", None) == "MoveSL":
-                                    move_sl_proposals.append((rr_name, getattr(sa, "value", None)))
-
-                        if not move_sl_proposals:
-                            new_sl = float(trade.get("sl") or 0)
-                        else:
-                            # تسجيل التعارضات إن وجدت
-                            proposed_values = sorted(
-                                {
-                                    float(v)
-                                    for (_name, v) in move_sl_proposals
-                                    if v is not None and str(v) != ""
-                                }
-                            )
-                            if len(proposed_values) > 1:
-                                logger.info(
-                                    "[POST_ENTRY][MoveSL] conflict proposals="
-                                    + ";".join(
-                                        f"{name}={val}" for (name, val) in move_sl_proposals
-                                    )
-                                )
-
-                        symbol = trade.get("symbol") or pos.get("symbol")
-                        direction = trade.get("direction") or pos.get("direction")
-                        current_sl = trade.get("sl")
-                        try:
-                            current_sl_val = float(current_sl) if current_sl is not None else 0.0
-                        except Exception:
-                            current_sl_val = 0.0
-
-                        candidates: List[float] = []
-                        for _name, v in move_sl_proposals:
-                            if v is None:
-                                continue
-                            try:
-                                fv = float(v)
-                            except Exception:
-                                continue
-
-                            # تجاهل المقترحات التي تقلل الحماية (تحريك وقف الخسارة للخلف)
-                            if direction in ["buy", "BUY", "Buy"]:
-                                if fv > current_sl_val:
-                                    candidates.append(fv)
-                            elif direction in ["sell", "SELL", "Sell"]:
-                                if fv < current_sl_val:
-                                    candidates.append(fv)
-                            else:
-                                candidates.append(fv)
-
-                        if not candidates:
-                            new_sl = current_sl_val
-                        else:
-                            # اختيار الأكثر تحفظاً (الأقرب للسعر الحالي في الاتجاه المناسب)
-                            if direction in ["buy", "BUY", "Buy"]:
-                                new_sl = max(candidates)
-                            else:
-                                new_sl = min(candidates)
-
-                        if new_sl is not None and new_sl > 0 and symbol and direction:
-                            ok = self._executor.modify_sl(
-                                order_id=order_id,
-                                symbol=str(symbol),
-                                direction=str(direction),
-                                new_sl=float(new_sl),
-                            )
-                            if ok:
-                                reason = "Stop Loss Modified"
-                                entry_price = (
-                                    trade.get("entry_price")
-                                    or trade.get("entry")
-                                    or pos.get("entry_price")
-                                    or pos.get("price_open")
-                                    or pos.get("entryPrice")
-                                )
-                                try:
-                                    entry_price_f = float(entry_price)
-                                except Exception:
-                                    entry_price_f = float(pos.get("entry_price") or 0.0)
-
-                                evt = SLModifiedEvent(
-                                    ticket=str(order_id),
-                                    symbol=str(symbol),
-                                    direction=str(direction),
-                                    old_sl=float(current_sl_val),
-                                    new_sl=float(new_sl),
-                                    entry_price=entry_price_f,
-                                    reason=str(reason),
-                                    ts=time.time(),
-                                ).to_event()
-                                self._bus.publish(evt)
-                    except Exception:
-                        pass
-
-            except Exception as e:
-                import traceback
-                logger.error(f"[POST_ENTRY] per-position error ticket={order_id}: {traceback.format_exc()}")
-                continue
-
+            for row in get_last_decisions(limit=20) or []:
+                if str(row.get("symbol")) == symbol:
+                    return {
+                        "direction": row.get("direction"),
+                        "final_score": row.get("final_score"),
+                        "ai_confidence": row.get("ai_confidence"),
+                        "mtf_aligned": bool(row.get("mtf_aligned")),
+                    }
+        except Exception as exc:
+            logger.warning("[POST_ENTRY] signal lookup failed for %s: %s", symbol, exc)
+        return None
 
     def loop(self) -> None:
-        logger.info("PostEntryManager started")
+        logger.info("PostEntryManager started (interval=%.1fs)", self._interval)
         while True:
             try:
                 self.run_once()
-            except Exception as e:
-                logger.error(f"PostEntryManager loop error: {e}")
+            except Exception as exc:
+                logger.error("PostEntryManager loop error: %s", exc)
             time.sleep(self._interval)
 
 
-def start_post_entry_manager(loop_interval_sec: float = None) -> threading.Thread:
+def start_post_entry_manager(loop_interval_sec: Optional[float] = None) -> threading.Thread:
     mgr = PostEntryManager(loop_interval_sec=loop_interval_sec)
-    t = threading.Thread(target=mgr.loop, daemon=True, name="post_entry_manager_thread")
-    t.start()
-    return t
+    thread = threading.Thread(target=mgr.loop, daemon=True, name="post_entry_manager_thread")
+    thread.start()
+    return thread

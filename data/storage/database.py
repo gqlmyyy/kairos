@@ -27,10 +27,17 @@ def get_conn():
         ("trade_duration", "TEXT"),
         ("expected_indicators_json", "TEXT"),
         ("actual_indicators_json", "TEXT"),
-        # Persistent MFE/MAE for red flags (e.g., ProfitDecay) across restarts
+        # Persistent MFE/MAE (in R) across restarts, consumed by trade management
+        # and by the exit-model training pipeline.
         ("model_type", "TEXT"),
         ("mfe", "REAL DEFAULT 0.0"),
         ("mae", "REAL DEFAULT 0.0"),
+        # Trade profile chosen at entry (Layer 6). Fixed for the trade's life so
+        # a restart or a config change cannot silently re-profile a live position.
+        ("entry_profile", "TEXT"),
+        # Volume at entry, so the partial-TP ladder stays anchored to the
+        # original size as the position is scaled out.
+        ("expected_volume", "REAL"),
     ]:
         try:
             # NOTE: typ may include "DEFAULT 0.0" already
@@ -336,6 +343,10 @@ def upsert_execution_expected(
     expected_volatility_score_legacy: float = None,
     expected_ai_score_legacy: float = None,
     expected_indicators_json: str = None,
+    expected_sl: float = None,
+    expected_tp: float = None,
+    expected_volume: float = None,
+    entry_profile: str = None,
     strategy: str = "V3"
 ):
     """
@@ -370,6 +381,7 @@ def upsert_execution_expected(
             expected_momentum_score_legacy, expected_sentiment_score_legacy, expected_volatility_score_legacy,
 
             expected_indicators_json,
+            expected_sl, expected_tp, expected_volume, entry_profile,
             status
         ) VALUES (
             ?,?,
@@ -381,6 +393,7 @@ def upsert_execution_expected(
             ?,?,
             ?,?,?,?,
             ?,
+            ?,?,?,?,
             'open'
         )
         ON CONFLICT(order_id) DO UPDATE SET
@@ -414,6 +427,11 @@ def upsert_execution_expected(
             expected_volatility_score_legacy=excluded.expected_volatility_score_legacy,
 
             expected_indicators_json=excluded.expected_indicators_json,
+
+            expected_sl=excluded.expected_sl,
+            expected_tp=excluded.expected_tp,
+            expected_volume=excluded.expected_volume,
+            entry_profile=excluded.entry_profile,
             status='open'
     """, (
         now, now,
@@ -438,7 +456,12 @@ def upsert_execution_expected(
         # expected_momentum_score_legacy, expected_sentiment_score_legacy, expected_volatility_score_legacy
         expected_momentum_score_legacy, expected_sentiment_score_legacy, expected_volatility_score_legacy,
 
-        expected_indicators_json
+        expected_indicators_json,
+
+        # expected_sl/tp: previously never written by the live path, which left
+        # every downstream R-multiple calculation without a risk denominator.
+        # expected_volume anchors the partial-TP ladder to the entry size.
+        expected_sl, expected_tp, expected_volume, entry_profile
     ))
 
     conn.commit()

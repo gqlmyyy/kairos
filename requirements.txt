@@ -1,12 +1,21 @@
-﻿requests==2.31.0
+# Core runtime
+requests==2.31.0
 feedparser==6.0.12
 python-dotenv==1.0.0
 fpdf2==2.7.5
 
-# Optional: For historical data fetching
-yfinance>=0.2.33
-alpha-vantage>=2.3.1
+# Broker
+MetaTrader5>=5.0.45 ; sys_platform == "win32"
+
+# ML (entry + exit models)
+xgboost>=2.0.0
+numpy>=1.24.0
+scikit-learn>=1.3.0
 pandas>=2.0.0
 
-# Optional: For advanced ML (if needed for future)
-scikit-learn>=1.3.0
+# Historical data fetching
+yfinance>=0.2.33
+alpha-vantage>=2.3.1
+
+# Tests
+pytest>=7.4.0

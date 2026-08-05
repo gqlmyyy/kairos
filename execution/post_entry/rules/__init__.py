@@ -1,2 +1,0 @@
-"""Fixed post-entry rules."""
-

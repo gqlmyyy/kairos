@@ -41,9 +41,9 @@ from decision.voting_engine import make_decision
 from decision.signal_engine import generate_signal
 from decision.confidence_engine import calculate_confidence
 from risk.risk_engine import can_trade
-from risk.sltp import calculate_sl_tp, calculate_sl_tp_distances
 from risk.position_sizing import calculate_position_size
 from risk.risk_governor import get_risk_governor
+from trade_management import TradeManagementOrchestrator
 from data.market.candle_boundary import get_last_completed_candle_time
 from config import TF_DECISION
 from execution.quantdinger_client import login, connect_mt5, check_mt5_status
@@ -591,16 +591,31 @@ def run_cycle():
             atr = get_atr(symbol)
 
             # ============================================================
-            # NEW: Calculate SL/TP as DISTANCES (not absolute prices)
-            # This eliminates price discrepancy between QuantDinger and MT5
+            # Trade management - Layer 6 then Layer 2 (entry side)
+            #
+            # Layer 6 resolves the trade profile from the entry context; the
+            # resolved settings drive the SL/TP multipliers for this trade and
+            # are persisted so the post-entry loop manages it consistently.
             # ============================================================
+            regime_name = (
+                regime.get("regime", regime.get("market_regime", "unknown"))
+                if isinstance(regime, dict) else str(regime)
+            )
+            entry_profile, tm_settings = TradeManagementOrchestrator.resolve_profile(
+                regime=regime_name,
+                mtf_aligned=mtf.aligned,
+                trend_strength=mtf.strength if isinstance(mtf.strength, (int, float)) else None,
+            )
+
             try:
-                sl_distance, tp_distance = calculate_sl_tp_distances(
-                    symbol, atr, regime, account_equity=equity
+                protection = TradeManagementOrchestrator.compute_entry_protection(
+                    symbol, atr, regime_name, account_equity=equity, settings=tm_settings
                 )
+                sl_distance = protection.sl_distance
+                tp_distance = protection.tp_distance
                 sl_tp_calculated = sl_distance is not None and tp_distance is not None
             except Exception as e:
-                logger.error(f"[SLTP] Failed to calculate SL/TP distances for {symbol}: {e}")
+                logger.error(f"[TM_L2] Failed to compute initial protection for {symbol}: {e}")
                 continue
             # Use real consecutive losses from daily stats so risk-based sizing reacts to losing streaks
             stats_for_sizing = get_daily_stats()
@@ -762,7 +777,7 @@ def run_cycle():
                 
                 # Recalculate SL/TP based on actual execution price for DB storage
                 # This ensures DB records match what was actually sent to MT5
-                sl, tp = calculate_sl_tp(symbol, entry_price, direction, atr, account_equity=equity)
+                sl, tp = protection.apply_to(entry_price, direction)
 
                 expected_payload = {
                     "expected_rsi": features.get("rsi", None),
@@ -827,6 +842,13 @@ def run_cycle():
                     expected_news_impact_score=expected_payload["expected_news_impact_score"],
 
                     expected_indicators_json=None,
+                    # Trade-management anchors: SL/TP define 1R for every
+                    # downstream R-multiple; volume anchors the partial ladder;
+                    # entry_profile fixes the profile for the trade's life.
+                    expected_sl=sl,
+                    expected_tp=tp,
+                    expected_volume=position_size,
+                    entry_profile=entry_profile,
                     strategy="V3",
                 )
 

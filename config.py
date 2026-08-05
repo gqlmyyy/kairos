@@ -135,10 +135,6 @@ RECONCILIATION_INTERVAL = 60  # every 60 seconds
 BROKER_UTC_OFFSET_HOURS = float(os.getenv("BROKER_UTC_OFFSET_HOURS", "3"))
 
 
-# ==============================
-# ML Exit Model
-# ==============================
-ML_EXIT_THRESHOLD = 0.4
 # ============================================================================
 # AI/ML EXIT MODEL - DISABLED (Feature Flag)
 # ============================================================================
@@ -160,105 +156,12 @@ ATR_SL_BASE_MULTIPLIER = 1.5
 ATR_TP_BASE_MULTIPLIER = 2.5
 
 # ==============================
-# Trailing Stop (break-even threshold)
-# ==============================
-# Trailing stop only activates after the trade reaches this profit threshold
-# (in units of ATR). 0 = activate immediately (legacy behavior).
-TRAILING_ACTIVATE_ATR_MULTIPLE = 1.0
-
-# ==============================
 # Risk Governor (independent halt)
 # ==============================
 # Maximum cumulative loss in R units before halting new entries.
 RISK_GOVERNOR_MAX_LOSS_R = 6.0
 # Persist halt state across bot restarts.
 RISK_GOVERNOR_PERSIST = True
-
-# ==============================
-# Profit Decay Detector
-# ==============================
-PROFIT_DECAY_ENABLED = False
-PROFIT_DECAY_PWIN_THRESHOLD = 0.3
-PROFIT_DECAY_TRIGGER = 0.7   # يغلق إذا ربح الحالي أقل من 70% من أقصى ربح
-# Profit Decay
-PROFIT_DECAY_MIN_PEAK = 20.0   # لا تبدأ حماية الأرباح إلا إذا وصل أعلى ربح إلى 20$
-# ==============================
-# Dynamic TP
-# ==============================
-DYNAMIC_TP_ENABLED = True
-DYNAMIC_TP_AGGRESSION = 0.5
-
-# ==============================
-# Trade Health Score
-# ==============================
-TRADE_HEALTH_ENABLED = True
-TRADE_HEALTH_MIN_SCORE = 40
-
-
-# ==============================
-# MFE/MAE Tracker
-# ==============================
-MFE_MAE_ENABLED = True
-
-
-# ==============================
-# Partial TP + Trailing
-# ==============================
-PARTIAL_TP_ENABLED = True
-PARTIAL_TP_RATIO = 0.5   # نسبة الهدف الأول من الهدف الكلي
-
-# ==============================
-# Time Stop
-# ==============================
-TIME_STOP_ENABLED = True
-TIME_STOP_MAX_MINUTES = 240
-
-# ==============================
-# News Shield
-# ==============================
-NEWS_SHIELD_ENABLED = True
-NEWS_SHIELD_MINUTES_BEFORE = 15
-NEWS_SHIELD_CLOSE_TRADES = False
-
-
-# ==============================
-# ATR Trailing
-# ==============================
-ATR_TRAILING_ENABLED = True
-ATR_TRAILING_MULTIPLIER = 2.0
-
-# ==============================
-# Multi-Level Breakeven
-# ==============================
-MULTI_BREAKEVEN_ENABLED = True
-LEVEL1_PROFIT_POINTS = 10
-LEVEL1_SL_OFFSET = 5
-LEVEL2_PROFIT_POINTS = 20
-LEVEL3_PROFIT_POINTS = 30
-LEVEL3_SL_OFFSET = 5
-
-# ==============================
-# Dynamic Breakeven
-# ==============================
-DYNAMIC_BREAKEVEN_ENABLED = True
-DYNAMIC_BE_FAST_EMA = 5
-DYNAMIC_BE_SLOW_EMA = 10
-DYNAMIC_BE_FALLBACK_POINTS = 15
-
-
-# ==============================
-# Protect Open Profit
-# ==============================
-PROTECT_PROFIT_ENABLED = True
-PROFIT_PROTECT_TRIGGER_POINTS = 50
-PROFIT_PROTECT_LOCK_POINTS = 10
-
-# ==============================
-# Equity Guard
-# ==============================
-EQUITY_GUARD_ENABLED = True
-MAX_DAILY_LOSS_PCT = 0.05
-MAX_CONSECUTIVE_LOSSES = 3
 
 # ==============================
 # Market Regime Detection
@@ -289,6 +192,29 @@ CORRELATION_ACTION = "block"  # "block" | "close_old"
 # Pairs that are treated as correlated (used by new correlation_protection module if needed)
 CORRELATED_PAIRS = [("EURUSD", "GBPUSD"), ("XAUUSD", "XAGUSD")]
 
+
+# ==============================
+# Logging
+# ==============================
+# File handler rotates daily at midnight and keeps LOG_RETENTION_DAYS backups.
+LOG_LEVEL_FILE = os.getenv("LOG_LEVEL_FILE", "INFO")
+LOG_LEVEL_CONSOLE = os.getenv("LOG_LEVEL_CONSOLE", "INFO")
+LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "14"))
+
+# Per-module overrides. The post-entry hot loop runs every few seconds, so its
+# chatty components are pinned to WARNING to keep the daily log readable.
+LOG_LEVEL_PER_MODULE = {
+    "tm.orchestrator": "INFO",
+    "tm.exit_score": "WARNING",
+    "tm.adaptive_trailing": "WARNING",
+    "tm.trade_age": "WARNING",
+    "tm.partial_tp": "WARNING",
+    "tm.breakeven": "WARNING",
+    "tm.min_modify": "WARNING",
+    "post_entry_trade_monitor": "WARNING",
+    "market_client": "INFO",
+    "hybrid_market_client": "INFO",
+}
 
 # ==============================
 # Performance DB
