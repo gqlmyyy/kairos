@@ -78,6 +78,33 @@ def load_closed_trades(db_path):
     return trades
 
 
+# =============================================================================
+# WARNING - LABEL LEAKAGE IN THIS FILE
+#
+# create_label() derives the target from actual_pnl, and extract_features()
+# below then estimates mfe/mae FROM THAT SAME actual_pnl:
+#
+#     if mfe == 0 and actual_pnl > 0:
+#         mfe = actual_pnl * 1.5
+#
+# That makes mfe a linear function of the label. Any model trained here will
+# validate well and predict nothing in production, where no actual_pnl exists
+# to leak from.
+#
+# Do not copy this pattern into new training code. If a feature is missing,
+# leave it missing so the variance check can report it.
+#
+# scripts/train_exit_model_v2.py supersedes this file: it builds features
+# through analysis/models/feature_schema.build_feature_vector (so the training
+# vector is by construction the inference vector), uses a time-ordered split,
+# and refuses to save a model that does not clear its AUC and variance gates.
+#
+# This file is kept only because build_exit_training_dataset.py and
+# build_real_exit_dataset.py still reference its label definition.
+# See ROADMAP.md item 1 and KNOWN_ISSUES.md item 3.
+# =============================================================================
+
+
 def create_label(trade):
     """
     Create was_bad_exit label:

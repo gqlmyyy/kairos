@@ -81,6 +81,29 @@ def to_features(row: dict) -> dict:
     }
 
 
+# =============================================================================
+# WARNING TO ANYONE EXTENDING THE FEATURE OR LABEL CODE BELOW
+#
+# Do NOT backfill mfe/mae (or any other feature) from actual_pnl.
+#
+# The previous trainer did exactly this:
+#
+#     if mfe == 0 and actual_pnl > 0:
+#         mfe = actual_pnl * 1.5          # scripts/train_exit_model.py
+#     if mae == 0 and actual_pnl < 0:
+#         mae = abs(actual_pnl) * 1.5
+#
+# actual_pnl is what make_label() derives the target from. Estimating a feature
+# from it manufactures a feature that is a linear function of the label. The
+# model then scores beautifully in validation and predicts nothing at all in
+# production, because at inference time there is no actual_pnl to leak from.
+#
+# If a feature is missing, leave it missing and let the variance check report
+# it. A visibly dead feature is a fixable data-pipeline problem; a leaked one
+# is an invisible modelling failure. See ROADMAP.md item 1 step 2.
+# =============================================================================
+
+
 def make_label(row: dict) -> int:
     """1 = bad exit, 0 = good exit.
 
