@@ -200,3 +200,56 @@ governor is fed, size resolves to `None` and `risk_amount_usd` silently becomes
 it reads volume from the live MT5 position
 (`post_entry_manager._risk_amount_usd`). Only the reconciliation path is
 affected.
+
+---
+
+## 9. RSI formula divides by zero on a perfectly flat series
+
+**Location:** `data/market/mt5_client.py` `get_indicators()` (inherited verbatim
+from the former `data/market/client.py`)
+
+**What happens:** when every close in the window is identical, all 14
+differences are zero. The classifier `(gains if diff > 0 else losses)` sends all
+of them to `losses`, so `avg_gain` falls back to `0.001` while `avg_loss`
+computes as a genuine `0.0`, and `rs = avg_gain / avg_loss` raises
+`ZeroDivisionError`. The surrounding `except` catches it and the function
+returns `FALLBACK_INDICATORS` — i.e. `rsi=50.0`, `atr=0.0008`.
+
+**Why it matters:** this is exactly the stale-feed condition observed in
+production, where ATR was byte-identical for hours. A frozen feed does not
+merely repeat the last real reading; past a certain point it silently
+substitutes fallback constants, and downstream `p_win` is then computed from
+placeholders rather than market data.
+
+**Why it was not fixed here:** the QuantDinger removal deliberately preserved
+every indicator formula byte-for-byte so the entry model's input distribution
+would not shift (see the module docstring). Changing the RSI is a separate,
+deliberate change that needs retraining. Pinned by
+`tests/test_mt5_client.py::TestIndicatorFormulas::test_perfectly_flat_series_falls_back`.
+
+**If fixing:** guard the division (`avg_loss = max(avg_loss, 1e-9)`) and only
+route a difference to `losses` when it is strictly negative, then retrain.
+
+---
+
+## 10. `MAX_CONSECUTIVE_LOSSES` was dropped from config, silently disabling the Risk Governor
+
+**Location:** `config.py`, imported by `risk/risk_governor.py:30`
+
+**What happened:** the trade-management rewrite removed the "Equity Guard"
+config section as part of deleting the dead generation. That section also held
+`MAX_CONSECUTIVE_LOSSES`, which the Risk Governor imports. The import therefore
+raised `ImportError`, so `get_risk_governor()` failed on every call.
+
+**Consequence:** `main.py` wraps the governor lookup in a bare `except`, so the
+failure was silent — no `[RISK_GOVERNOR]` line appeared in any log, and the
+cumulative-loss halt never armed. Live logs from 2026-08-06 confirm this: five
+hours of cycles with no governor output at all.
+
+**Status:** FIXED on the `claude/drop-quantdinger` branch by restoring the
+constant. A guard now exists (`tests` sweep every `from config import ...` and
+assert the name resolves) so a missing constant fails loudly instead.
+
+**Lesson recorded:** removing a config section is not safe just because the
+modules that defined its behaviour are dead — other modules may import
+individual constants from it.

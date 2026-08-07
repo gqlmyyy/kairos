@@ -9,7 +9,7 @@ from utils.logger import get_logger
 from data.storage.database import get_daily_stats, get_open_trades, get_last_decisions, get_weights
 from execution.mt5_direct import get_open_positions_mt5, close_trade_mt5, close_all_trades_mt5, check_mt5_status_mt5
 from telegram.notifier import send
-from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, QUANTDINGER_URL, SYMBOLS, INITIAL_WEIGHTS
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, SYMBOLS, INITIAL_WEIGHTS
 
 logger = get_logger("telegram_bot")
 BASE_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
@@ -70,11 +70,6 @@ def cmd_status():
    m = int((uptime.total_seconds() % 3600) // 60)
    stats = get_daily_stats()
    mt5 = "✅" if check_mt5_status_mt5() else "❌"
-   try:
-       r = requests.get(f"{QUANTDINGER_URL}/api/health", timeout=5)
-       qd_status = "✅" if r.status_code == 200 else "❌"
-   except:
-       qd_status = "❌"
    icon = "⏸" if bot_state["trading_paused"] else "✅"
    return f"""🤖 <b>بوت التداول V3</b>
 ========================
@@ -82,7 +77,6 @@ def cmd_status():
 🔄 الدورات: <b>{bot_state['cycle_count']}</b>
 🕐 آخر دورة: <b>{bot_state['last_cycle'] or 'لا يوجد'}</b>
 
-QuantDinger: {qd_status}
 MT5: {mt5}
 التداول: {icon}
 
@@ -110,23 +104,20 @@ def cmd_positions():
    return "\n".join(lines)
 
 def cmd_balance():
-   from execution.quantdinger_client import get_equity as qd_equity
-   from execution.quantdinger_client import get_headers
-   equity = qd_equity()
-   info = {"balance": 0, "margin": 0, "free_margin": 0, "equity": 0}
-   try:
-       r = requests.get(f"{QUANTDINGER_URL}/api/mt5/account", headers=get_headers(), timeout=5)
-       data = r.json()
-       if data.get("success"):
-           info = data
-   except:
-       pass
+   # Straight from the terminal - no REST intermediary, so the figures shown
+   # here are exactly the ones the risk engine sizes positions against.
+   from data.market.mt5_session import get_account_info
+
+   account = get_account_info()
+   if account is None:
+       return "💼 <b>معلومات الحساب</b>\n==================\n❌ جلسة MT5 غير متاحة"
+
    return f"""💼 <b>معلومات الحساب</b>
 ==================
-💰 الرصيد الفعلي: <b>{float(info.get('equity', equity)):.2f}$</b>
-🏦 الرصيد: <b>{float(info.get('balance', 0)):.2f}$</b>
-📊 الهامش المستخدم: <b>{float(info.get('margin', 0)):.2f}$</b>
-✅ الهامش المتاح: <b>{float(info.get('margin_free', 0)):.2f}$</b>"""
+💰 الرصيد الفعلي: <b>{float(getattr(account, 'equity', 0) or 0):.2f}$</b>
+🏦 الرصيد: <b>{float(getattr(account, 'balance', 0) or 0):.2f}$</b>
+📊 الهامش المستخدم: <b>{float(getattr(account, 'margin', 0) or 0):.2f}$</b>
+✅ الهامش المتاح: <b>{float(getattr(account, 'margin_free', 0) or 0):.2f}$</b>"""
 
 def cmd_why():
    decisions = get_last_decisions(5)

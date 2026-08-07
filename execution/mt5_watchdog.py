@@ -1,133 +1,99 @@
-﻿# Trading Bot V3 - execution/mt5_watchdog.py
-# MT5 connection watchdog - uses V1 proven reconnect logic
+"""Watchdog for the bot's own MT5 session.
 
-import time
+The previous implementation watched the wrong thing. It polled
+``{QUANTDINGER_URL}/api/mt5/status``, i.e. whether *QuantDinger* was connected
+to MT5 — not whether the bot's own session was alive. A healthy QuantDinger
+with a dead bot session read as "connected", and a reconnect attempt drove
+QuantDinger's session rather than the bot's.
+
+This version checks the session the bot actually trades through, via
+``mt5_session.is_healthy()`` (a local ``account_info()`` read, no broker round
+trip), and recovers it through the same module that owns it — so recovery takes
+the shared lock instead of racing the other threads.
+"""
+
+from __future__ import annotations
+
 import threading
+import time
+
+from config import WATCHDOG_FAIL_LIMIT, WATCHDOG_INTERVAL
+from data.market.mt5_session import ensure_session, is_available, is_healthy
 from utils.logger import get_logger
-from config import QUANTDINGER_URL, MT5_LOGIN, MT5_PASSWORD, MT5_SERVER, MT5_PATH, WATCHDOG_INTERVAL, WATCHDOG_FAIL_LIMIT
 
 logger = get_logger("mt5_watchdog")
 
-# We import these inside functions to avoid circular imports
-def _get_headers():
-    from execution.quantdinger_client import get_headers
-    return get_headers()
+# Grace period before the first check, so startup has finished.
+_STARTUP_GRACE_SEC = 60
 
-def _login():
-    from execution.quantdinger_client import login
-    return login()
 
-def check_mt5_connection():
-    """Check if MT5 is connected via QuantDinger status endpoint"""
-    try:
-        import requests
-        r = requests.get(
-            f"{QUANTDINGER_URL}/api/mt5/status",
-            headers=_get_headers(),
-            timeout=5
-        )
-        data = r.json()
-        return data.get("connected", False)
-    except Exception as e:
-        logger.error(f"MT5 check error: {e}")
-        return False
+def check_mt5_connection() -> bool:
+    """True when the bot's MT5 session is usable right now."""
+    return is_healthy()
 
-def reconnect_mt5(max_retries: int = 3, delay: float = 2.0):
-    """Reconnect MT5 using stored credentials with smart retries.
 
-    Requirements:
-    - 3 retries with delay=2s
-    - reinitialize/refresh token each attempt
-    - log clear error when all attempts fail
-    """
-    for attempt in range(max_retries):
+def reconnect_mt5(max_retries: int = 3, delay: float = 2.0) -> bool:
+    """Re-establish the session, forcing a fresh login."""
+    for attempt in range(1, max_retries + 1):
         try:
-            import requests
-
-            # Step 1: Refresh token first (V1 approach)
-            _login()
-
-            # Step 2: Check if already connected via account endpoint
-            r = requests.get(
-                f"{QUANTDINGER_URL}/api/mt5/account",
-                headers=_get_headers(),
-                timeout=5,
-            )
-            data = r.json()
-            if data.get("success"):
-                logger.info("MT5 already connected")
+            if ensure_session(force_relogin=True):
+                logger.info("MT5 session re-established (attempt %d/%d)", attempt, max_retries)
                 return True
+            logger.warning("MT5 reconnect attempt %d/%d failed", attempt, max_retries)
+        except Exception as exc:
+            logger.warning("MT5 reconnect attempt %d/%d raised: %s", attempt, max_retries, exc)
 
-            # Step 3: Connect with full config
-            mt5_config = {
-                "login": MT5_LOGIN,
-                "password": MT5_PASSWORD,
-                "server": MT5_SERVER,
-                "path": MT5_PATH,
-            }
-            r2 = requests.post(
-                f"{QUANTDINGER_URL}/api/mt5/connect",
-                headers=_get_headers(),
-                json=mt5_config,
-                timeout=15,
-            )
-            result = r2.json()
-
-            if result.get("success"):
-                balance = result.get("account", {}).get("balance", 0)
-                logger.info(f"MT5 reconnected! Balance: {balance}")
-                return True
-
-            logger.warning(f"MT5 reconnect attempt failed: {result}")
-        except Exception as e:
-            logger.warning(f"MT5 reconnect attempt error (attempt {attempt+1}/{max_retries}): {e}")
-
-        if attempt < max_retries - 1:
+        if attempt < max_retries:
             time.sleep(delay)
 
-    logger.error(f"MT5 reconnect failed after {max_retries} attempts (delay={delay}s)")
+    logger.error("MT5 reconnect failed after %d attempts", max_retries)
     return False
 
-def watchdog_loop():
-    consecutive_failures = 0
-    
+
+def watchdog_loop() -> None:
     from telegram.notifier import notify_alert, notify_status
-    
-    # Initial wait before starting checks
-    time.sleep(60)
-    
+
+    if not is_available():
+        logger.error("MetaTrader5 library unavailable - watchdog will not run")
+        return
+
+    consecutive_failures = 0
+    time.sleep(_STARTUP_GRACE_SEC)
+
     while True:
         try:
-            connected = check_mt5_connection()
-            
-            if not connected:
-                consecutive_failures += 1
-                logger.warning(f"MT5 disconnected! Attempt {consecutive_failures}/{WATCHDOG_FAIL_LIMIT}")
-                
-                if consecutive_failures == 1:
-                    notify_alert("⚠️ MT5 disconnected - attempting reconnect...")
-                
-                success = reconnect_mt5(max_retries=3, delay=2.0)
-                
-                if success:
-                    consecutive_failures = 0
-                    logger.info("MT5 reconnected successfully!")
-                    notify_status("✅ MT5 reconnected successfully")
-                else:
-                    if consecutive_failures >= WATCHDOG_FAIL_LIMIT:
-                        notify_alert(f"❌ MT5 failed to reconnect after {WATCHDOG_FAIL_LIMIT} attempts!\nCheck MT5 manually")
-            else:
+            if check_mt5_connection():
                 if consecutive_failures > 0:
-                    logger.info("MT5 connection restored")
-                    notify_status("✅ MT5 connection restored")
+                    logger.info("MT5 session restored")
+                    notify_status("✅ MT5 session restored")
                 consecutive_failures = 0
-                
-        except Exception as e:
-            logger.error(f"Watchdog error: {e}")
-        
+            else:
+                consecutive_failures += 1
+                logger.warning(
+                    "MT5 session unhealthy! Attempt %d/%d",
+                    consecutive_failures, WATCHDOG_FAIL_LIMIT,
+                )
+
+                if consecutive_failures == 1:
+                    notify_alert("⚠️ MT5 session lost - attempting to reconnect...")
+
+                if reconnect_mt5():
+                    consecutive_failures = 0
+                    logger.info("MT5 session recovered")
+                    notify_status("✅ MT5 session recovered")
+                elif consecutive_failures >= WATCHDOG_FAIL_LIMIT:
+                    notify_alert(
+                        f"❌ MT5 session could not be recovered after "
+                        f"{WATCHDOG_FAIL_LIMIT} attempts.\nCheck the terminal manually."
+                    )
+        except Exception as exc:
+            logger.error("Watchdog error: %s", exc)
+
         time.sleep(WATCHDOG_INTERVAL)
 
-def start_mt5_watchdog():
-    thread = threading.Thread(target=watchdog_loop, daemon=True)
+
+def start_mt5_watchdog() -> threading.Thread:
+    thread = threading.Thread(target=watchdog_loop, daemon=True, name="mt5_watchdog")
     thread.start()
-    logger.info("MT5 watchdog started (V1 reconnect logic)")
+    logger.info("MT5 watchdog started (interval=%ss)", WATCHDOG_INTERVAL)
+    return thread

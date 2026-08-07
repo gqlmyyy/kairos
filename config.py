@@ -18,13 +18,6 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8543232380:AAHqo6L7Lntf2C3
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "6697592398")
 
 # ==============================
-# QuantDinger
-# ==============================
-QUANTDINGER_URL = os.getenv("QUANTDINGER_URL", "http://localhost:5000")
-QUANTDINGER_USERNAME = os.getenv("QUANTDINGER_USERNAME", "quantdinger")
-QUANTDINGER_PASSWORD = os.getenv("QUANTDINGER_PASSWORD", "NB35189906")
-
-# ==============================
 # MT5
 # ==============================
 MT5_LOGIN = int(os.getenv("MT5_LOGIN", "110609311"))
@@ -99,12 +92,10 @@ RETRY_DELAY = 5
 ORDER_TIMEOUT = 30
 
 # ==============================
-# QuantDinger Order Filling Mode
+# MT5 Order Filling Mode
 # ==============================
-QUANTDINGER_ORDER_TYPE_FILLING = os.getenv("QUANTDINGER_ORDER_TYPE_FILLING", "")
-QUANTDINGER_ORDER_TYPE_FILLING_STRATEGY = os.getenv(
-    "QUANTDINGER_ORDER_TYPE_FILLING_STRATEGY", "candidates_then_omit"
-)
+# Empty = let mt5_direct probe the symbol's supported filling modes.
+MT5_ORDER_TYPE_FILLING = os.getenv("MT5_ORDER_TYPE_FILLING", "")
 
 
 # ==============================
@@ -162,6 +153,11 @@ ATR_TP_BASE_MULTIPLIER = 2.5
 RISK_GOVERNOR_MAX_LOSS_R = 6.0
 # Persist halt state across bot restarts.
 RISK_GOVERNOR_PERSIST = True
+# Consecutive losing trades before new entries are halted.
+# Imported by risk/risk_governor.py — it previously lived in the "Equity Guard"
+# section, which was removed with the old trade-management generation. Losing it
+# broke the governor's import entirely, which silently disabled risk halting.
+MAX_CONSECUTIVE_LOSSES = 3
 
 # ==============================
 # Market Regime Detection
@@ -212,7 +208,8 @@ LOG_LEVEL_PER_MODULE = {
     "tm.breakeven": "WARNING",
     "tm.min_modify": "WARNING",
     "post_entry_trade_monitor": "WARNING",
-    "market_client": "INFO",
+    "mt5_client": "INFO",
+    "mt5_session": "INFO",
     "hybrid_market_client": "INFO",
 }
 

@@ -1,6 +1,6 @@
 """Market Regime Detection
 
-QuantDinger-only ATR/ADX sourcing.
+ATR/ADX computed from MT5 candles.
 
 Public API (must not change):
   - detect_market_regime(symbol: str, atr: float = None) -> str
@@ -157,7 +157,7 @@ def _compute_atr_adx_from_candles(candles: List[Dict[str, Any]], period: int = 1
         return None, None
 
 
-def _get_atr_adx_from_quantdinger(symbol: str, timeframe: str = "H4") -> Tuple[Optional[float], Optional[float]]:
+def _get_atr_adx_from_market(symbol: str, timeframe: str = "H4") -> Tuple[Optional[float], Optional[float]]:
     """Fetch candles from QuantDinger and compute ATR/ADX locally."""
     try:
         # Existing project helper (QuantDinger data source)
@@ -209,7 +209,7 @@ def detect_market_regime(symbol: str, atr: float = None) -> str:
                 used_atr = None
 
         # Always try to get ADX; if ATR missing compute from QuantDinger.
-        q_atr, q_adx = _get_atr_adx_from_quantdinger(sym, timeframe="H4")
+        q_atr, q_adx = _get_atr_adx_from_market(sym, timeframe="H4")
 
         if used_atr is None and q_atr is not None and q_atr > 0:
             used_atr = q_atr
