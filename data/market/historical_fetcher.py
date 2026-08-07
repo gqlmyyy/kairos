@@ -10,75 +10,53 @@ from typing import List, Dict, Any, Optional, Tuple
 import logging
 
 from utils.logger import get_logger
-from config import QUANTDINGER_URL, SYMBOLS
+from config import SYMBOLS
 
 logger = get_logger("historical_fetcher")
 
 
 class MT5HistoricalFetcher:
-    """Fetch historical candles from MT5 via QuantDinger"""
-    
-    def __init__(self):
-        self.base_url = QUANTDINGER_URL
-        self.session = requests.Session()
-        
-    def _get_headers(self) -> dict:
-        from execution.quantdinger_client import get_headers
-        return get_headers()
-    
+    """Fetch historical candles directly from the MT5 terminal.
+
+    Previously this went through QuantDinger's /api/indicator/kline endpoint.
+    It now reads from MT5 itself, which removes a network hop and a second MT5
+    session while returning the same candle shape.
+    """
+
     def fetch_candles(
-        self, 
+        self,
         symbol: str,
         timeframe: str = "H1",
         days_back: int = 365,
-        limit: int = 5000
+        limit: int = 5000,
     ) -> List[Dict[str, Any]]:
         """
-        Fetch historical candles from MT5 via QuantDinger
-        
+        Fetch historical candles from MT5.
+
         Args:
             symbol: Trading symbol (e.g. "EURUSD")
             timeframe: M1, M5, M15, H1, H4, D1
-            days_back: How many days of history to fetch
-            limit: Max candles to fetch per request
-            
+            days_back: retained for signature compatibility; MT5 is asked for
+                `limit` bars counted back from the present, which is how the
+                QuantDinger endpoint behaved too.
+            limit: Max candles to fetch
+
         Returns:
             List of candle dictionaries with OHLCV data
         """
         try:
-            market_map = {
-                "EURUSD": "Forex", "GBPUSD": "Forex", "USDJPY": "Forex",
-                "XAUUSD": "Forex", "USDCAD": "Forex", "AUDUSD": "Forex"
-            }
-            market = market_map.get(symbol, "Forex")
-            
-            params = {
-                "symbol": symbol,
-                "market": market,
-                "timeframe": timeframe,
-                "limit": min(limit, 5000)  # MT5 max is typically 5000
-            }
-            
-            logger.info(f"Fetching {symbol} {timeframe} candles ({days_back} days)...")
-            
-            r = self.session.get(
-                f"{self.base_url}/api/indicator/kline",
-                params=params,
-                headers=self._get_headers(),
-                timeout=15
-            )
-            
-            data = r.json()
-            
-            if data.get("code") not in [1, 200]:
-                logger.error(f"MT5 fetch error: {data.get('msg')}")
+            from data.market.mt5_client import get_candles
+
+            logger.info(f"Fetching {symbol} {timeframe} candles (limit={limit})...")
+            candles = get_candles(symbol, timeframe=timeframe, count=min(limit, 5000))
+
+            if not candles:
+                logger.error(f"MT5 returned no candles for {symbol} {timeframe}")
                 return []
-            
-            candles = data.get("data", [])
+
             logger.info(f"✓ Fetched {len(candles)} candles for {symbol} {timeframe}")
-            
             return candles
-            
+
         except Exception as e:
             logger.error(f"MT5 historical fetch error: {e}")
             return []

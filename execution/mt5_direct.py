@@ -18,41 +18,23 @@ logger = get_logger("mt5_direct")
 
 
 def _ensure_mt5_initialized() -> bool:
-    if mt5 is None:
-        logger.error("FATAL: MetaTrader5 library is not available. Install MetaTrader5 package.")
-        return False
+    """Delegate to the shared session.
 
-    try:
-        # Some environments already initialized; calling again is safe.
-        if not mt5.terminal_info():
-            if not mt5.initialize():
-                logger.error("FATAL: mt5.initialize() failed")
-                return False
-    except Exception as e:
-        logger.error(f"FATAL: mt5 initialize check failed: {e}")
-        return False
+    This used to call mt5.initialize() and then mt5.login() on every single
+    invocation — a full broker round trip per order and per status check. The
+    session is now established once in data.market.mt5_session, which also
+    guards every call with a process-wide lock so this module no longer races
+    the market-data and post-entry threads over the same IPC channel.
+    """
+    from data.market.mt5_session import ensure_session
 
-    # Login
-    try:
-        if not mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER):
-            logger.error(f"FATAL: mt5.login() failed: {mt5.last_error()}")
-            return False
-    except Exception as e:
-        logger.error(f"FATAL: mt5.login() exception: {e}")
-        return False
-
-    return True
+    return ensure_session()
 
 
 def _ensure_symbol_selected(symbol: str) -> bool:
-    try:
-        if not mt5.symbol_select(symbol, True):
-            logger.error(f"FATAL: mt5.symbol_select({symbol}) failed")
-            return False
-    except Exception as e:
-        logger.error(f"FATAL: mt5.symbol_select exception for {symbol}: {e}")
-        return False
-    return True
+    from data.market.mt5_session import ensure_symbol
+
+    return ensure_symbol(symbol)
 
 
 def _get_positions_qd_like_dicts() -> list:

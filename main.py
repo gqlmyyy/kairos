@@ -17,7 +17,7 @@ from data.news.fetcher import fetch_rss_news
 from data.news.calendar import is_high_impact_soon
 from data.news.scoring import filter_relevant_news
 from data.market.hybrid_client import get_atr as get_atr_hybrid
-from data.market.client import set_token as set_market_token, get_equity
+from data.market.mt5_client import get_equity
 
 from analysis.ai.deepseek import analyze_news
 
@@ -46,7 +46,7 @@ from risk.risk_governor import get_risk_governor
 from trade_management import TradeManagementOrchestrator
 from data.market.candle_boundary import get_last_completed_candle_time
 from config import TF_DECISION
-from execution.quantdinger_client import login, connect_mt5, check_mt5_status
+from data.market.mt5_session import ensure_session, is_healthy as mt5_is_healthy
 from execution.mt5_direct import open_trade
 
 from execution.reconciliation import start_reconciliation
@@ -344,13 +344,13 @@ def run_cycle():
             logger.info("Trading paused, skipping")
             return
 
-    # MT5 check
-    if not check_mt5_status():
-        logger.warning("MT5 disconnected, reconnecting...")
-        if connect_mt5():
-            logger.info("MT5 reconnected")
+    # MT5 check - reads terminal state directly, no REST intermediary
+    if not mt5_is_healthy():
+        logger.warning("MT5 session unhealthy, re-establishing...")
+        if ensure_session(force_relogin=True):
+            logger.info("MT5 session restored")
         else:
-            logger.warning("MT5 still disconnected")
+            logger.warning("MT5 session could not be restored")
             return
 
     # ============================================================
@@ -892,43 +892,19 @@ def main():
     logger.info("Trading Bot V3 starting...")
 
     init_db()
-    token = login()
-    if not token:
-        logger.error("Failed to login to QuantDinger")
-        return
 
-    set_market_token(token)
-
-    # Explicitly initialize MT5 IPC early (before startup_safety_check).
-    # NOTE: this is the missing step responsible for positions_get() returning None.
     if mt5 is None:
-        logger.error("[STARTUP_SAFETY] mt5 module is None. Stopping bot.")
+        logger.error("[STARTUP_SAFETY] MetaTrader5 library is not available. Stopping bot.")
         return
 
-    try:
-        if not mt5.terminal_info():
-            if not mt5.initialize():
-                logger.error(f"[STARTUP_SAFETY] mt5.initialize() failed last_error={mt5.last_error()}")
-                return
-    except Exception as e:
-        try:
-            le = mt5.last_error()
-        except Exception:
-            le = None
-        logger.error(f"[STARTUP_SAFETY] mt5.initialize() exception err={e} last_error={le}. Stopping bot.")
+    # Establish the one MT5 session the whole process shares. mt5_session owns
+    # initialize() + login() and guards every subsequent call with a lock, so
+    # the four background threads no longer contend over the same IPC channel.
+    if not ensure_session():
+        logger.error("[STARTUP_SAFETY] Could not establish MT5 session. Stopping bot.")
         return
 
-    try:
-        if mt5.terminal_info() is None:
-            logger.error("[STARTUP_SAFETY] mt5.terminal_info() is None after initialize. Stopping bot.")
-            return
-    except Exception:
-        pass
-
-    if not connect_mt5():
-        logger.warning("MT5 connection failed at startup")
-    else:
-        logger.info("MT5 connected")
+    logger.info("MT5 session established")
 
     # Startup safety check (run once) BEFORE any thread and BEFORE Cycle 1
     ok = startup_safety_check(mt5)
