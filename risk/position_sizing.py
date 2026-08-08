@@ -2,7 +2,13 @@
 # Equity-based position sizing with ATR-aware lot sizing
 
 from utils.logger import get_logger
-from config import BASE_RISK_PERCENT, MAX_OPEN_TRADES, STOP_AFTER_LOSSES, PIP_VALUES
+from config import (
+    BASE_RISK_PERCENT,
+    MAX_OPEN_TRADES,
+    MAX_RISK_PER_TRADE_PCT,
+    STOP_AFTER_LOSSES,
+    PIP_VALUES,
+)
 from data.storage.database import get_daily_stats, get_total_open_trades
 
 logger = get_logger("position_sizing")
@@ -123,7 +129,51 @@ def calculate_position_size(
     # 5. تطبيق الحدود الآمنة
     # ==============================
     max_lot = MAX_LOT_PER_SYMBOL.get(symbol, 0.10)
-    size = round(max(MIN_LOT, min(size, max_lot)), 2)
+
+    # Upper clamp is safe: trading less than the risk budget allows is fine.
+    size = min(size, max_lot)
+
+    # Lower bound is NOT a clamp — it is a rejection.
+    #
+    # This used to be max(MIN_LOT, size), which silently rounded an
+    # undersized position *up* to the broker minimum. That inverts the meaning
+    # of the risk budget: when the risk-correct size is below the minimum lot,
+    # the honest answer is that this account cannot take this trade at this
+    # stop distance, not that it should take a larger one.
+    #
+    # Concretely, with $99.40 equity and XAUUSD at ATR 47.36, a correct
+    # 1.5xATR stop needs 0.000035 lots. Rounding that up to 0.01 risks $71.03 —
+    # 71% of the account on a single trade.
+    #
+    # Returning 0.0 blocks the entry: main.py requires position_size > 0 in
+    # final_decision_valid.
+    if size < MIN_LOT:
+        risk_at_min_lot = sl_pips * pip_value_per_lot * MIN_LOT
+        hard_ceiling = equity * MAX_RISK_PER_TRADE_PCT
+
+        if risk_at_min_lot > hard_ceiling:
+            logger.warning(
+                f"Position REJECTED for {symbol}: risk-correct size {size:.6f} lots is below "
+                f"the broker minimum {MIN_LOT}, and taking {MIN_LOT} lots would risk "
+                f"${risk_at_min_lot:.2f} ({risk_at_min_lot / equity * 100:.1f}% of equity), "
+                f"above the {MAX_RISK_PER_TRADE_PCT * 100:.1f}% hard ceiling "
+                f"(${hard_ceiling:.2f}). "
+                f"sl_dist={sl_distance:.5f} ({sl_pips:.1f} pips) equity={equity:.2f}"
+            )
+            return 0.0
+
+        # Rounding up overshoots the soft budget but stays under the hard
+        # ceiling, which is the acceptable case for discrete lot sizes.
+        logger.info(
+            f"Position size rounded up to broker minimum for {symbol}: "
+            f"{size:.6f} -> {MIN_LOT} lots, risking ${risk_at_min_lot:.2f} "
+            f"({risk_at_min_lot / equity * 100:.2f}% of equity) against a target "
+            f"budget of ${risk_amount:.2f}. Within the "
+            f"{MAX_RISK_PER_TRADE_PCT * 100:.1f}% ceiling."
+        )
+        return MIN_LOT
+
+    size = round(size, 2)
 
     logger.info(
         f"Position size: {size} (equity={equity:.0f}, risk={risk_percent:.3f}, "

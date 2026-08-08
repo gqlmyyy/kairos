@@ -170,41 +170,48 @@ def get_max_sl_distance(symbol: str, max_sl_pips: float = 100.0, atr: float = No
         except Exception:
             max_sl_from_atr = 0.0
 
-    # The effective max SL from all constraints (before absolute cap)
-    effective_max = max(min_sl_from_stops, max_sl_from_pips, max_sl_from_atr)
+    # Ceilings are combined with min(), not max().
+    #
+    # The previous code used max(), which meant MAX_SL_PIPS — a setting whose
+    # name promises an upper bound — acted as a *floor*: an ATR spike could
+    # push the "maximum" far above the configured pip cap. The broker's stop
+    # level is a genuine floor and is applied separately below.
+    ceilings = [c for c in (max_sl_from_pips, max_sl_from_atr) if c > 0]
+    effective_max = min(ceilings) if ceilings else max_sl_from_pips
+
+    # The broker will reject a stop closer than its stops_level, so that is a
+    # hard floor regardless of any ceiling above.
+    if min_sl_from_stops > 0:
+        effective_max = max(effective_max, min_sl_from_stops)
 
     # ==============================
-    # ABSOLUTE CAP (account-equity based) — UNITS FIX
+    # NO EQUITY CAP HERE — DELIBERATE
     # ==============================
-    # Convert the dollar cap (equity * 5%) to a PRICE DISTANCE using
-    # lot_size and pip_value_per_lot — the SAME source as position_sizing.py.
+    # This function used to shrink the stop distance so that trading MAX_LOT
+    # would risk no more than 5% of equity. That inverted the correct order of
+    # operations and produced stops that were unusable in practice.
     #
-    # OLD (BUGGY): min(effective_max, equity * 0.05)
-    #   -> compares price distance (e.g. 0.0030) with dollars (e.g. $5000)
-    #   -> cap NEVER triggers because $5000 >> 0.0030
+    # Observed live on 2026-08-07 with a $99.40 account:
+    #   XAUUSD ATR=47.36 -> stop should be 71.03, the cap forced it to 0.497,
+    #   i.e. 1% of one ATR. The position was opened and stopped out in the same
+    #   second. EURUSD and GBPUSD were capped to a single pip.
     #
-    # NEW (FIXED): convert dollars -> price distance first, then compare
-    if account_equity is not None:
-        try:
-            eq = float(account_equity)
-            if eq > 0 and pip > 0:
-                max_risk_dollars = eq * _ABSOLUTE_SL_ACCOUNT_FRACTION
-                max_lot = _get_max_lot(sym_upper)
-                pip_value_per_lot = _get_pip_value_per_lot(sym_upper)
-                dollars_per_pip = max_lot * pip_value_per_lot
-                if dollars_per_pip > 0:
-                    max_sl_pips_from_cap = max_risk_dollars / dollars_per_pip
-                    equity_cap_price_distance = max_sl_pips_from_cap * pip
-                    effective_max = min(effective_max, equity_cap_price_distance)
-                    logger.debug(
-                        f"[EQUITY_CAP] {symbol}: equity={eq:.0f} max_risk=${max_risk_dollars:.2f} "
-                        f"max_lot={max_lot} pip_val_per_lot={pip_value_per_lot} "
-                        f"dollars_per_pip={dollars_per_pip:.2f} "
-                        f"cap_pips={max_sl_pips_from_cap:.1f} "
-                        f"cap_price_dist={equity_cap_price_distance:.5f} "
-                        f"effective_max={effective_max:.5f}"
-                    )
-        except Exception as e:
-            logger.error(f"[EQUITY_CAP] {symbol}: conversion error: {e}")
+    # Two things were wrong:
+    #   1. The cap assumed MAX_LOT (0.10 for XAUUSD, 0.50 for EURUSD) while the
+    #      actual order was 0.01 lots, making it 10-50x tighter than intended.
+    #   2. More fundamentally, stop placement is a *market* decision — ATR says
+    #      where the trade is invalidated. Risk is then controlled by choosing
+    #      the position size, which is what calculate_position_size() is for.
+    #      Deriving the stop from an assumed lot size reverses that and, taken
+    #      to its conclusion, places the stop wherever the account is small
+    #      rather than wherever the trade is wrong.
+    #
+    # Equity-based risk control now lives entirely in calculate_position_size(),
+    # which refuses the trade outright when the risk-correct size falls below
+    # the broker's minimum lot.
+    #
+    # account_equity is still accepted so callers need not change; it is
+    # intentionally unused.
+    _ = account_equity
 
     return effective_max
