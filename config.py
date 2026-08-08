@@ -54,6 +54,19 @@ ACCOUNT_DRAWDOWN_HALF = 0.10    # 10% account DD → half risk
 ACCOUNT_DRAWDOWN_STOP = 0.20    # 20% account DD → full stop
 MAX_OPEN_TRADES = 3
 STOP_AFTER_LOSSES = 10
+# Hard ceiling on a single trade's risk, as a fraction of equity.
+#
+# BASE_RISK_PERCENT above is the *target* budget and scales with signal
+# strength. This is the absolute limit that target may never be rounded past.
+#
+# It matters because broker lot sizes are discrete: when the risk-correct size
+# falls below the minimum lot, the choice is to take the minimum lot (risking
+# more than budgeted) or skip the trade. Overshooting the soft budget slightly
+# is acceptable; overshooting this ceiling is not, and the trade is refused.
+#
+# Sized from a real incident: a $99.40 account taking XAUUSD at the 0.01
+# minimum lot with a correct 1.5xATR stop risks $71 — 71% of the account.
+MAX_RISK_PER_TRADE_PCT = 0.02
 MAX_SL_PIPS = 100
 ATR_SL_MULTIPLIER = 1.5
 ATR_TP_MULTIPLIER = 2.5

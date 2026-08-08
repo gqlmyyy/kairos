@@ -253,3 +253,82 @@ assert the name resolves) so a missing constant fails loudly instead.
 **Lesson recorded:** removing a config section is not safe just because the
 modules that defined its behaviour are dead — other modules may import
 individual constants from it.
+
+---
+
+## 11. Stop-loss cap crushed stops to ~1% of ATR — FIXED
+
+**Location:** `risk/symbol_info.py` `get_max_sl_distance()`, `risk/position_sizing.py`
+
+**The incident (2026-08-07 18:59:56, live):** a XAUUSD position opened and was
+stopped out within the same second.
+
+```
+XAUUSD ATR=47.35571  sl_mult=1.50  ->  stop should be 71.03
+                                       stop actually  0.497   (1% of one ATR)
+entry 4341.55  ->  SL 4341.053     TP 4495.456      R:R = 1:310
+```
+
+Every symbol was affected, all showing `capped=True`: EURUSD and GBPUSD both
+had their stops cut to a single pip.
+
+**Root cause — two defects that compounded:**
+
+1. `get_max_sl_distance` shrank the stop so that trading `MAX_LOT` would risk
+   under 5% of equity. It assumed 0.10 lots for XAUUSD while the actual order
+   was 0.01 — ten times tighter than intended (fifty times for EURUSD, where
+   `MAX_LOT` is 0.50). More fundamentally it derived stop *placement* from an
+   assumed position *size*, reversing the correct order: ATR says where the
+   trade is invalidated, and size is then chosen to fit the risk budget.
+
+2. `effective_max = max(min_sl_from_stops, max_sl_from_pips, max_sl_from_atr)`
+   combined ceilings with `max()`, so `MAX_SL_PIPS` — a setting whose name
+   promises an upper bound — acted as a floor.
+
+**Why it went unnoticed:** no trade had opened since the rebuild, so the stop
+calculation had never reached a broker.
+
+**The fix, in two parts.** Fixing only the stop would have been worse: with the
+correct 1.5xATR stop, the risk-correct XAUUSD size on a $99.40 account is
+0.000035 lots, and `position_sizing` used `max(MIN_LOT, size)` — silently
+rounding up to 0.01 lots and risking **$71.03, i.e. 71.5% of the account**, on
+one trade.
+
+- `get_max_sl_distance` no longer applies an equity cap and combines ceilings
+  with `min()`. Equity now controls size only.
+- `calculate_position_size` treats the minimum lot as a rejection threshold,
+  not a clamp. When the risk-correct size is below it, the minimum lot is taken
+  only if that stays within `MAX_RISK_PER_TRADE_PCT` (new, 2%); otherwise the
+  function returns 0.0 and `main.py`'s `position_size > 0` gate blocks entry.
+
+Pinned by `tests/test_risk_sizing.py` (17 tests), including a sweep asserting
+no accepted trade ever exceeds the hard ceiling at any account size.
+
+**Consequence to be aware of:** a ~$99 account cannot trade XAUUSD at all with
+a correct stop — the broker minimum lot alone risks most of it. The bot now
+declines instead of taking the trade. That is the intended behaviour.
+
+---
+
+## 12. `MAX_SL_PIPS` is calibrated for forex, not for gold
+
+**Location:** `config.py` `MAX_SL_PIPS = 100`
+
+**What happens:** the cap is applied as `MAX_SL_PIPS * PIP_VALUES[symbol]`, and
+the pip size differs by two orders of magnitude between instruments:
+
+| Symbol | pip | cap in price units | typical ATR | cap as a share of ATR |
+|---|---|---|---|---|
+| EURUSD | 0.0001 | 0.0100 | 0.00175 | 5.7x ATR — never binds |
+| XAUUSD | 0.1 | 10.0 | 47.36 | **0.21x ATR — always binds** |
+
+So on gold the stop is capped at roughly a fifth of one ATR regardless of
+market conditions, which still yields a lopsided 1:15 risk/reward and a stop
+well inside normal noise.
+
+**Not changed here:** this is a risk limit, and re-calibrating it is a trading
+decision rather than a bug fix. Issue 11's rejection logic prevents the unsafe
+trade either way.
+
+**If fixing:** make the cap ATR-relative (e.g. `max_sl = k * ATR`) or set it
+per-symbol, rather than a single pip count shared across instrument classes.
