@@ -28,6 +28,28 @@ except Exception:
     mt5 = None
 
 
+def _recover_mt5_session(context: str) -> bool:
+    """Re-establish the shared MT5 session after an IPC failure.
+
+    Recovery must go through data.market.mt5_session, which owns the connection
+    and holds the process-wide lock while rebuilding it. Calling
+    mt5.shutdown()/mt5.initialize() from here — as this module used to — kills
+    the connection while the main cycle, the post-entry manager and the watchdog
+    are mid-call, producing exactly the IPC errors it was trying to repair.
+    """
+    logger.warning("[RECONCILE] %s — recovering session via mt5_session", context)
+    try:
+        from data.market.mt5_session import ensure_session
+
+        recovered = ensure_session(force_relogin=True)
+        if not recovered:
+            logger.error("[RECONCILE] session recovery failed (%s)", context)
+        return recovered
+    except Exception as exc:
+        logger.error("[RECONCILE] session recovery raised (%s): %s", context, exc)
+        return False
+
+
 def safe_positions_get(max_retries: int = 3, delay: float = 2.0):
     """Get MT5 positions with smart retries + reinitialize on IPC loss.
 
@@ -67,16 +89,11 @@ def safe_positions_get(max_retries: int = 3, delay: float = 2.0):
                 code = None
 
             if code == -10004:
-                try:
-                    logger.warning("[RECONCILE] IPC lost (-10004). Reinitializing MT5...")
-                    mt5.shutdown()
-                except Exception:
-                    pass
-                try:
-                    time.sleep(1)
-                    mt5.initialize()
-                except Exception as e2:
-                    logger.error(f"[RECONCILE] MT5 reinitialize failed after IPC loss: {e2}")
+                # Recover through the session owner. This used to call
+                # mt5.shutdown() directly, tearing down the connection the
+                # other three threads were mid-call on — which manufactured
+                # more IPC failures than it fixed.
+                _recover_mt5_session("IPC lost (-10004) during positions_get")
 
         # retry delay + smart reinit for IPC even if no exception
         if attempt < max_retries - 1:
@@ -95,16 +112,7 @@ def safe_positions_get(max_retries: int = 3, delay: float = 2.0):
                         code = None
 
                 if code == -10004:
-                    try:
-                        logger.warning("[RECONCILE] IPC still failing (-10004). shutdown+initialize before next retry...")
-                        mt5.shutdown()
-                    except Exception:
-                        pass
-                    try:
-                        time.sleep(1)
-                        mt5.initialize()
-                    except Exception:
-                        pass
+                    _recover_mt5_session("IPC still failing (-10004) before retry")
             except Exception:
                 pass
 
@@ -727,8 +735,12 @@ def _apply_sltp_modification(order_id: str, symbol: str, direction: str,
         return False
 
     try:
-        # Ensure terminal is initialized and logged in
-        mt5.initialize(login=None, password=None, server=None)  # safe even if already initialized
+        # Session ownership belongs to mt5_session; do not initialize here.
+        from data.market.mt5_session import ensure_session
+
+        if not ensure_session():
+            logger.error("[SMART_PROFIT] MT5 session unavailable — skipping SL/TP modify")
+            return False
 
         # best-effort select symbol
         try:

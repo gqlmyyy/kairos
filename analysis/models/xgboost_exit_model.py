@@ -240,7 +240,7 @@ def train_exit_model(execution_data: List[Dict]) -> bool:
         bst = xgb.train(params, dtrain, num_boost_round=100)
 
         # Save model
-        os.makedirs(MODELS_DIR, exist_ok=True)
+        os.makedirs(_MODELS_DIR, exist_ok=True)
         bst.save_model(MODEL_PATH)
 
         logger.info(f"Exit Model saved to {MODEL_PATH}")

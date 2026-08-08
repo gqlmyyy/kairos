@@ -9,9 +9,20 @@ from config import DB_FILE, INITIAL_WEIGHTS
 
 logger = get_logger("database")
 
+# How long a writer waits for a competing transaction before giving up.
+# WAL allows one writer at a time; this turns an instant "database is locked"
+# into a bounded wait, which is what the concurrent writers actually need.
+DB_BUSY_TIMEOUT_SEC = 10.0
+
 def get_conn():
-    conn = sqlite3.connect(DB_FILE)
+    # busy_timeout matters here: five threads write to this database (main
+    # cycle, reconciliation, post-entry manager, telegram, feedback). Without
+    # it, a concurrent writer raises "database is locked" immediately instead
+    # of waiting for the current transaction to finish — and several call
+    # sites swallow that exception, silently dropping the write.
+    conn = sqlite3.connect(DB_FILE, timeout=DB_BUSY_TIMEOUT_SEC)
     conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(f"PRAGMA busy_timeout={int(DB_BUSY_TIMEOUT_SEC * 1000)}")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
 
@@ -38,6 +49,10 @@ def get_conn():
         # Volume at entry, so the partial-TP ladder stays anchored to the
         # original size as the position is scaled out.
         ("expected_volume", "REAL"),
+        # Partial-TP ladder levels already taken, as a comma-separated list of
+        # indices (e.g. "0,1"). Held in memory only until now, so a restart
+        # re-armed a level that had already executed and took the partial twice.
+        ("partial_levels_done", "TEXT"),
     ]:
         try:
             # NOTE: typ may include "DEFAULT 0.0" already
@@ -472,6 +487,104 @@ def upsert_execution_expected(
     conn.commit()
     conn.close()
     return True
+
+def update_partial_levels_done(order_id: str, levels) -> bool:
+    """Persist which partial-TP ladder levels have already executed.
+
+    Stored as a sorted comma-separated index list ("0,1"). This must be written
+    immediately after the broker confirms a partial close: the state lived only
+    in memory before, so a restart re-armed a level that had already been taken
+    and closed part of the position a second time.
+
+    Returns True when a row was updated.
+    """
+    if order_id is None:
+        return False
+    order_id = str(order_id).strip()
+    if not order_id:
+        return False
+
+    encoded = ",".join(str(int(level)) for level in sorted(set(levels or ())))
+
+    # get_conn() is inside the try on purpose: the broker has already executed
+    # the partial by the time this is called, so a database failure must be
+    # reported to the caller as False — never raised into the management loop,
+    # where it would abort the rest of the cycle for an already-done action.
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(
+            "UPDATE execution_dataset SET partial_levels_done=?, dataset_updated_at=? "
+            "WHERE order_id=?",
+            (encoded, datetime.now().isoformat(), order_id),
+        )
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as exc:
+        logger.error(
+            "[DB] update_partial_levels_done failed order_id=%s: %s", order_id, exc
+        )
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def update_breakeven_done(order_id: str, done: bool = True) -> bool:
+    """Persist that the stop has been moved to break-even for this trade.
+
+    The column existed and was read back on startup, but nothing ever wrote it:
+    the live path only set an in-memory flag. A restart therefore re-armed
+    break-even on a trade whose stop was already there. Harmless in isolation
+    (the modify filter rejects a non-improving stop), but it made the restored
+    state a lie, and the same gap did cause duplicate partial closes.
+    """
+    if order_id is None:
+        return False
+    order_id = str(order_id).strip()
+    if not order_id:
+        return False
+
+    conn = None
+    try:
+        conn = get_conn()
+        c = conn.cursor()
+        c.execute(
+            "UPDATE execution_dataset SET breakeven_done=?, dataset_updated_at=? "
+            "WHERE order_id=?",
+            (1 if done else 0, datetime.now().isoformat(), order_id),
+        )
+        conn.commit()
+        return c.rowcount > 0
+    except Exception as exc:
+        logger.error("[DB] update_breakeven_done failed order_id=%s: %s", order_id, exc)
+        return False
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def parse_partial_levels_done(raw) -> set:
+    """Decode the stored ladder state back into a set of indices.
+
+    Tolerant by design: an unparsable value yields an empty set, which re-arms
+    the ladder. That is the conservative direction — worst case a level is
+    retaken, whereas inventing indices could skip protection entirely.
+    """
+    if not raw:
+        return set()
+    levels = set()
+    for part in str(raw).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            levels.add(int(part))
+        except ValueError:
+            logger.warning("[DB] ignoring unparsable partial level %r", part)
+    return levels
+
 
 def update_execution_mfe_mae(order_id: str, mfe: float, mae: float) -> bool:
     """Persist max favorable excursion (mfe) and max adverse excursion (mae) for an open trade.

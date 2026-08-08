@@ -54,19 +54,42 @@ def can_trade(symbol: str, direction: str, final_score: float,
     """Complete risk check before opening a trade"""
 
     # 1. Duplicate check (MT5-only) - block if symbol already has an open position
-    # Requirement: use mt5.positions_get(symbol=symbol) directly and block regardless of direction.
+    # Requirement: use mt5.positions_get(symbol=symbol) and block regardless of direction.
+    #
+    # M-04: this used to say "allow trading if MT5 query fails" and treated
+    # positions_get() returning None the same as "zero positions" — but the MT5
+    # API documents None as ambiguous between "no results" and "an error
+    # occurred" (check last_error() to tell them apart). Either path silently
+    # skipped the one check that exists to stop a second position from opening
+    # on a symbol that already has one, exactly when MT5 is least reliable. A
+    # duplicate check that could not be verified is not a duplicate check that
+    # passed, so both cases now reject the trade instead. Routed through the
+    # shared session lock (data.market.mt5_session) rather than a raw import,
+    # consistent with every other live MT5 read in this codebase.
     try:
-        import MetaTrader5 as mt5  # type: ignore
+        from data.market.mt5_session import ensure_session, mt5, mt5_call
 
-        positions = mt5.positions_get(symbol=symbol)
-        if positions and len(positions) > 0:
+        if not ensure_session():
+            return False, "Duplicate check unavailable: MT5 session down"
+
+        with mt5_call():
+            positions = mt5.positions_get(symbol=symbol)
+            last_err = mt5.last_error() if positions is None else None
+
+        if positions is None:
+            reason = f"Duplicate check unavailable: positions_get returned None ({last_err})"
+            logger.error(f"Risk: {reason} ({symbol})")
+            return False, reason
+
+        if len(positions) > 0:
             logger.info(
                 f"Risk: Duplicate symbol blocked via MT5 - {symbol} already has an open position"
             )
             return False, "Duplicate symbol blocked via MT5"
     except Exception as e:
-        # Defensive requirement: allow trading if MT5 query fails.
-        logger.error(f"Risk: MT5 duplicate check failed (allowing trade): {e}")
+        reason = f"Duplicate check failed: {e}"
+        logger.error(f"Risk: {reason} ({symbol})")
+        return False, reason
 
 
 
@@ -118,6 +141,14 @@ def can_trade(symbol: str, direction: str, final_score: float,
         return False, corr_reason
 
     # 7b. Correlation Protection module (optional finer control)
+    #
+    # is_correlated_open() already catches its own internal errors and returns
+    # False ("not correlated"). What used to reach this except block was
+    # therefore only the two things it *doesn't* guard: a broken import, or
+    # get_open_trades() failing against a locked/corrupt DB — and both were
+    # swallowed into `return True, "OK"`, i.e. a database failure silently
+    # became risk-check approval. A gate that cannot be evaluated is not a
+    # gate that passed.
     try:
         from execution.risk_management.correlation_protection import is_correlated_open
 
@@ -127,8 +158,10 @@ def can_trade(symbol: str, direction: str, final_score: float,
             reason = "CorrelationProtection: correlated open trade exists"
             logger.info(f"Risk: CorrelationProtection blocked ({symbol} {direction})")
             return False, reason
-    except Exception:
-        pass
+    except Exception as exc:
+        reason = f"CorrelationProtection check failed: {exc}"
+        logger.error(f"Risk: {reason} ({symbol} {direction})")
+        return False, reason
 
     return True, "OK"
 

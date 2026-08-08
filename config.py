@@ -7,23 +7,69 @@ import os
 load_dotenv()
 
 
+# ==============================
+# Environment readers
+# ==============================
+# `os.getenv(name, default)` returns the default only when the variable is
+# *absent*. A present-but-empty `MT5_LOGIN=` returns "", and `int("")` raised a
+# bare ValueError at import time — before any logging existed, from a module
+# every entry point imports, with a traceback that did not name the variable.
+# An empty `.env` line is the normal outcome of copying `.env.example`, so this
+# took the whole bot down rather than degrading one feature.
+#
+# These readers treat empty/whitespace-only as absent, and turn a malformed
+# value into an error that says which variable is wrong.
+
+
+def _env_str(name: str, default: str) -> str:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip()
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        raise ValueError(
+            f"config: environment variable {name}={raw!r} is not a valid "
+            f"integer (expected something like {default})"
+        ) from None
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.getenv(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        raise ValueError(
+            f"config: environment variable {name}={raw!r} is not a valid "
+            f"number (expected something like {default})"
+        ) from None
+
 
 # ==============================
 # API Keys
 # ==============================
 
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "sk-2922e9853c654120b9b89844295efdc5")
-FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "d8l1ia9r01qut1f8gd80d8l1ia9r01qut1f8gd8g")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "8543232380:AAHqo6L7Lntf2C3Tu5Dfo4U2bWn5os_XPk8")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "6697592398")
+DEEPSEEK_API_KEY = _env_str("DEEPSEEK_API_KEY", "")
+FINNHUB_API_KEY = _env_str("FINNHUB_API_KEY", "")
+TELEGRAM_BOT_TOKEN = _env_str("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = _env_str("TELEGRAM_CHAT_ID", "")
 
 # ==============================
 # MT5
 # ==============================
-MT5_LOGIN = int(os.getenv("MT5_LOGIN", "110609311"))
-MT5_PASSWORD = os.getenv("MT5_PASSWORD", "*7DsDjJu")
-MT5_SERVER = os.getenv("MT5_SERVER", "MetaQuotes-Demo")
-MT5_PATH = os.getenv("MT5_PATH", r"C:\\Program Files\\MetaTrader 5\\terminal64.exe")
+MT5_LOGIN = _env_int("MT5_LOGIN", 0)
+MT5_PASSWORD = _env_str("MT5_PASSWORD", "")
+MT5_SERVER = _env_str("MT5_SERVER", "")
+MT5_PATH = _env_str("MT5_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
 
 # ==============================
 # Trading Pairs
@@ -33,7 +79,7 @@ SYMBOLS = ["EURUSD", "XAUUSD", "GBPUSD"]
 # Entry model selection
 # v1: legacy entry inference (existing)
 # v2: independent entry_v2 architecture (self-contained)
-ENTRY_MODEL_VERSION = os.getenv("ENTRY_MODEL_VERSION", "v1")
+ENTRY_MODEL_VERSION = _env_str("ENTRY_MODEL_VERSION", "v1")
 
 
 # ==============================
@@ -67,9 +113,6 @@ STOP_AFTER_LOSSES = 10
 # Sized from a real incident: a $99.40 account taking XAUUSD at the 0.01
 # minimum lot with a correct 1.5xATR stop risks $71 — 71% of the account.
 MAX_RISK_PER_TRADE_PCT = 0.02
-MAX_SL_PIPS = 100
-ATR_SL_MULTIPLIER = 1.5
-ATR_TP_MULTIPLIER = 2.5
 
 # ==============================
 # Decision Voting Weights
@@ -108,7 +151,7 @@ ORDER_TIMEOUT = 30
 # MT5 Order Filling Mode
 # ==============================
 # Empty = let mt5_direct probe the symbol's supported filling modes.
-MT5_ORDER_TYPE_FILLING = os.getenv("MT5_ORDER_TYPE_FILLING", "")
+MT5_ORDER_TYPE_FILLING = _env_str("MT5_ORDER_TYPE_FILLING", "")
 
 
 # ==============================
@@ -136,28 +179,17 @@ RECONCILIATION_INTERVAL = 60  # every 60 seconds
 # offset from UTC. Some brokers use UTC+2 / UTC+3 depending on DST.
 # This offset is used to convert MT5 broker-local times to UTC for all time deltas.
 # IMPORTANT: if broker DST changes, update this value accordingly.
-BROKER_UTC_OFFSET_HOURS = float(os.getenv("BROKER_UTC_OFFSET_HOURS", "3"))
+BROKER_UTC_OFFSET_HOURS = _env_float("BROKER_UTC_OFFSET_HOURS", 3.0)
 
-
-# ============================================================================
-# AI/ML EXIT MODEL - DISABLED (Feature Flag)
-# ============================================================================
-# The XGBoost exit model is DISABLED until it proves out-of-sample performance
-# (AUC and accuracy clearly above random chance). Do NOT re-enable without
-# validating on a held-out dataset.
-#
-#   - ML_EXIT_ENABLED=False  -> the AI/ML exit model NEVER affects exit decisions.
-#   - The code is kept intact but all call paths are gated by this flag.
-# ============================================================================
-ML_EXIT_ENABLED = False
 
 # ==============================
-# ATR-based Risk Management (regime-aware)
+# Trade-management settings live in trade_management/tm_config.py
 # ==============================
-# SL/TP multipliers are adjusted per market regime (taken from get_regime_settings).
-# high_volatility -> wider SL, mean_reversion -> tighter SL, trend -> extended TP.
-ATR_SL_BASE_MULTIPLIER = 1.5
-ATR_TP_BASE_MULTIPLIER = 2.5
+# ML_EXIT_ENABLED, ATR_SL_BASE_MULTIPLIER, ATR_TP_BASE_MULTIPLIER and
+# MAX_SL_PIPS used to be defined here as well. Nothing read those copies —
+# every consumer resolves them through tm_config — so two values with the same
+# name could disagree, and editing the one here silently did nothing.
+# Single source of truth: trade_management/tm_config.py.
 
 # ==============================
 # Risk Governor (independent halt)
@@ -206,9 +238,9 @@ CORRELATED_PAIRS = [("EURUSD", "GBPUSD"), ("XAUUSD", "XAGUSD")]
 # Logging
 # ==============================
 # File handler rotates daily at midnight and keeps LOG_RETENTION_DAYS backups.
-LOG_LEVEL_FILE = os.getenv("LOG_LEVEL_FILE", "INFO")
-LOG_LEVEL_CONSOLE = os.getenv("LOG_LEVEL_CONSOLE", "INFO")
-LOG_RETENTION_DAYS = int(os.getenv("LOG_RETENTION_DAYS", "14"))
+LOG_LEVEL_FILE = _env_str("LOG_LEVEL_FILE", "INFO")
+LOG_LEVEL_CONSOLE = _env_str("LOG_LEVEL_CONSOLE", "INFO")
+LOG_RETENTION_DAYS = _env_int("LOG_RETENTION_DAYS", 14)
 
 # Per-module overrides. The post-entry hot loop runs every few seconds, so its
 # chatty components are pinned to WARNING to keep the daily log readable.

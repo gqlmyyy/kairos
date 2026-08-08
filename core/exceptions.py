@@ -3,15 +3,6 @@
 class TradingBotError(Exception):
     pass
 
-class QuantDingerError(TradingBotError):
-    pass
-
-class QuantDingerAuthError(QuantDingerError):
-    pass
-
-class QuantDingerConnectionError(QuantDingerError):
-    pass
-
 class MT5Error(TradingBotError):
     pass
 

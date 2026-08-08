@@ -88,7 +88,12 @@ def _mt5_timeframe(timeframe: str):
 
 
 def get_candles(symbol: str, timeframe: str = "4H", count: int = 100) -> list:
-    """Fetch candles from MT5, with caching.
+    """Fetch **completed** candles from MT5, with caching.
+
+    The currently forming candle is excluded: it changes on every tick, so an
+    indicator computed from it is not reproducible and does not match a
+    backtest run on closed bars. The newest element of the returned list is
+    always the last candle that has actually closed.
 
     Returns a list of dicts with keys: time, open, high, low, close,
     tick_volume — the same shape the rest of the project already expects.
@@ -118,7 +123,25 @@ def get_candles(symbol: str, timeframe: str = "4H", count: int = 100) -> list:
 
     try:
         with mt5_call():
-            bars = mt5.copy_rates_from_pos(symbol, tf_const, 0, count)
+            # Ask for one extra bar: position 0 is the *currently forming*
+            # candle, which is dropped below. Requesting count+1 keeps the
+            # number of completed bars returned equal to `count`.
+            bars = mt5.copy_rates_from_pos(symbol, tf_const, 0, count + 1)
+
+        # ------------------------------------------------------------------
+        # Drop the forming candle.
+        #
+        # copy_rates_from_pos returns oldest -> newest, so bars[-1] is the bar
+        # still being built. Indicators previously read closes[-1], i.e. a
+        # value that changes tick by tick and does not match what any backtest
+        # on closed bars would have seen. Trading decisions must use completed
+        # candles only.
+        # ------------------------------------------------------------------
+        if bars is not None and len(bars) > 1:
+            bars = bars[:-1]
+        elif bars is not None and len(bars) == 1:
+            # Only the forming bar exists — nothing completed to act on.
+            bars = bars[:0]
 
         if bars is None or len(bars) == 0:
             _error_count[symbol] = _error_count.get(symbol, 0) + 1

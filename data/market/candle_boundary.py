@@ -69,20 +69,16 @@ def get_last_completed_candle_time(symbol: str, timeframe: str = "H1") -> Option
         return None
 
     try:
-        # Ensure terminal is initialized
-        if not mt5.terminal_info():
-            if not mt5.initialize():
-                logger.warning(f"[CANDLE_BOUNDARY] mt5.initialize() failed: {mt5.last_error()}")
-                return None
+        # Session ownership belongs to mt5_session — do not initialize here.
+        from data.market.mt5_session import ensure_symbol, mt5_call
 
-        # Select symbol
-        try:
-            mt5.symbol_select(symbol, True)
-        except Exception:
-            pass
+        if not ensure_symbol(symbol):
+            logger.warning("[CANDLE_BOUNDARY] symbol unavailable: %s", symbol)
+            return None
 
         # Fetch 2 candles: the last completed + the currently forming
-        bars = mt5.copy_rates_from_pos(symbol, tf_const, 0, 2)
+        with mt5_call():
+            bars = mt5.copy_rates_from_pos(symbol, tf_const, 0, 2)
         if bars is None or len(bars) < 2:
             logger.warning(f"[CANDLE_BOUNDARY] copy_rates_from_pos returned insufficient data for {symbol} {tf_str}")
             return None

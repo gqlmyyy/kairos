@@ -98,6 +98,26 @@ def ensure_session(force_relogin: bool = False) -> bool:
         logger.error("[MT5_SESSION] MetaTrader5 library not available")
         return False
 
+    # config.py no longer carries hardcoded fallback credentials, so a blank or
+    # partially-filled .env now reaches here instead of silently authenticating
+    # against somebody else's demo account. Name the missing variables rather
+    # than letting mt5.login() return a generic failure code.
+    missing = [
+        name for name, value in (
+            ("MT5_LOGIN", MT5_LOGIN),
+            ("MT5_PASSWORD", MT5_PASSWORD),
+            ("MT5_SERVER", MT5_SERVER),
+        )
+        if not value
+    ]
+    if missing:
+        logger.error(
+            "[MT5_SESSION] cannot connect: %s not set in .env — "
+            "refusing to attempt a login with incomplete credentials",
+            ", ".join(missing),
+        )
+        return False
+
     with _lock:
         # Fast path: already established and still healthy.
         if _initialized and _login_done and not force_relogin:
