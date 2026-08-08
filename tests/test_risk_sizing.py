@@ -23,7 +23,8 @@ from __future__ import annotations
 
 import pytest
 
-from config import MAX_SL_PIPS, PIP_VALUES
+from config import PIP_VALUES
+from trade_management.tm_config import MAX_SL_PIPS
 from risk.position_sizing import MIN_LOT, calculate_position_size, get_pip_value_per_lot
 from risk.symbol_info import get_max_sl_distance
 

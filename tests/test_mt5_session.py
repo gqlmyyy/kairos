@@ -75,6 +75,14 @@ def fake_mt5(monkeypatch):
     fake = FakeMT5()
     monkeypatch.setattr(mt5_session, "mt5", fake)
     monkeypatch.setattr(mt5_session, "MT5_AVAILABLE", True)
+    # config.py no longer ships hardcoded fallback credentials, and the .env on a
+    # dev machine is usually blank, so ensure_session() now refuses to log in
+    # with an incomplete set. Supply a complete one — these tests are about
+    # session lifecycle, not credential handling (see
+    # tests/test_config_single_source.py for that).
+    monkeypatch.setattr(mt5_session, "MT5_LOGIN", 12345)
+    monkeypatch.setattr(mt5_session, "MT5_PASSWORD", "test-password")
+    monkeypatch.setattr(mt5_session, "MT5_SERVER", "Test-Server")
     mt5_session._reset_state_for_tests()
     yield fake
     mt5_session._reset_state_for_tests()

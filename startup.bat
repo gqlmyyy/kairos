@@ -1,103 +1,122 @@
 @echo off
-title Trading Bot V3 Startup
+REM ============================================================================
+REM Kairos - startup
+REM
+REM This script used to start Docker Desktop, bring up the QuantDinger compose
+REM stack, and block on `curl http://localhost:8888/health` for 60 seconds
+REM before launching the bot -- exiting with an error if that never answered.
+REM QuantDinger has been removed; market data now comes straight from MT5. Left
+REM as it was, this script could no longer start the bot at all: the health
+REM check on a service that no longer exists always failed, and step 5 was
+REM never reached.
+REM
+REM What remains is what the bot actually needs: MetaTrader 5 running, and a
+REM populated .env.
+REM ============================================================================
+
+@echo off
+title Kairos Startup
 color 0A
 
 echo ====================================
-echo    Trading Bot V3 - Auto Startup
+echo    Kairos - Startup
 echo ====================================
 echo.
 
-:: ==============================
-:: [1/5] Docker
-:: ==============================
-echo [1/5] Checking Docker...
-docker info >nul 2>&1
-if %errorlevel% neq 0 (
-    echo Starting Docker Desktop...
-    start "" "C:\Program Files\Docker\Docker\Docker Desktop.exe"
-    echo Waiting for Docker to be ready...
-    :WAIT_DOCKER
-    timeout /t 5 /nobreak > nul
-    docker info >nul 2>&1
-    if %errorlevel% neq 0 goto WAIT_DOCKER
-    echo Docker is ready!
-) else (
-    echo Docker is already running.
+cd /d "%~dp0"
+
+REM ==============================
+REM [1/4] Configuration
+REM ==============================
+echo [1/4] Checking configuration...
+if not exist ".env" (
+    echo.
+    echo ERROR: .env not found in %CD%
+    echo.
+    echo Copy .env.example to .env and fill in MT5_LOGIN, MT5_PASSWORD
+    echo and MT5_SERVER. The bot refuses to log in with an incomplete
+    echo credential set, so a blank .env will stop it at startup.
+    echo.
+    pause
+    exit /b 1
 )
+echo Found .env
+
+python --version >nul 2>&1
+if errorlevel 1 (
+    echo ERROR: Python not found on PATH. Install Python 3.10+ and retry.
+    pause
+    exit /b 1
+)
+echo Python is available
 
 echo.
-:: ==============================
-:: [2/5] QuantDinger Containers
-:: ==============================
-echo [2/5] Starting QuantDinger containers...
-cd /d "C:\Users\ACER\QuantDinger\QuantDinger"
-if %errorlevel% neq 0 (
-    echo ERROR: QuantDinger path not found!
+REM ==============================
+REM [2/4] MetaTrader 5
+REM ==============================
+echo [2/4] Starting MetaTrader 5...
+tasklist /FI "IMAGENAME eq terminal64.exe" 2>nul | find /I "terminal64.exe" >nul
+if %errorlevel% equ 0 (
+    echo MT5 is already running.
+    goto MT5_READY
+)
+
+if not exist "C:\Program Files\MetaTrader 5\terminal64.exe" (
+    echo ERROR: MT5 not found at C:\Program Files\MetaTrader 5\terminal64.exe
+    echo If it is installed elsewhere, set MT5_PATH in .env and start it manually.
     pause
     exit /b 1
 )
 
-docker compose up -d
-timeout /t 5 /nobreak > nul
-docker compose stop backend
-timeout /t 3 /nobreak > nul
-echo QuantDinger containers ready!
-
-echo.
-:: ==============================
-:: [3/5] MT5
-:: ==============================
-echo [3/5] Starting MT5...
 start "" "C:\Program Files\MetaTrader 5\terminal64.exe"
-echo Waiting for MT5...
+echo Waiting for MT5 to start...
+
+REM Bounded wait. The old script looped forever on Docker with no way out.
+set MT5_TRIES=0
 :WAIT_MT5
 timeout /t 5 /nobreak > nul
 tasklist /FI "IMAGENAME eq terminal64.exe" 2>nul | find /I "terminal64.exe" >nul
-if %errorlevel% neq 0 goto WAIT_MT5
-echo MT5 is running!
-timeout /t 10 /nobreak > nul
+if %errorlevel% equ 0 goto MT5_READY
+set /a MT5_TRIES+=1
+echo Still waiting for MT5... attempt %MT5_TRIES%
+if %MT5_TRIES% lss 24 goto WAIT_MT5
+echo.
+echo ERROR: MT5 did not start within 2 minutes.
+pause
+exit /b 1
+
+:MT5_READY
+echo MT5 is running.
+REM The terminal needs a moment after the process appears before its Python
+REM API accepts a connection.
+echo Giving the terminal time to finish loading...
+timeout /t 15 /nobreak > nul
 
 echo.
-:: ==============================
-:: [4/5] QuantDinger Backend
-:: ==============================
-echo [4/5] Starting QuantDinger Backend...
-cd /d "C:\Users\ACER\QuantDinger\QuantDinger\backend_api_python"
-if %errorlevel% neq 0 (
-    echo ERROR: Backend path not found!
-    pause
-    exit /b 1
-)
-
-start "QD Backend" cmd /k "python run.py"
-
-echo Waiting for backend to be ready...
-set RETRY=0
-:WAIT_BACKEND
-timeout /t 3 /nobreak > nul
-curl -s http://localhost:8888/health >nul 2>&1
-if %errorlevel% neq 0 (
-    set /a RETRY+=1
-    echo Still waiting... attempt %RETRY%
-    if %RETRY% lss 20 goto WAIT_BACKEND
+REM ==============================
+REM [3/4] Connection check
+REM ==============================
+echo [3/4] Verifying the MT5 connection...
+python -c "from data.market.mt5_session import ensure_session, get_account_info; import sys; ok = ensure_session(); acc = get_account_info() if ok else None; print('Connected: login=%s balance=%s' % (acc.login, acc.balance)) if acc else print('Connection failed'); sys.exit(0 if acc else 1)"
+if errorlevel 1 (
     echo.
-    echo ERROR: Backend did not start after 60s!
-    echo Check QD Backend window for errors.
+    echo ERROR: could not establish an MT5 session.
+    echo Check MT5_LOGIN / MT5_PASSWORD / MT5_SERVER in .env, and that the
+    echo terminal is logged in and allows algorithmic trading.
+    echo.
     pause
     exit /b 1
 )
-echo Backend is ready!
 
 echo.
-:: ==============================
-:: [5/5] Trading Bot
-:: ==============================
-echo [5/5] Starting Trading Bot V3...
-cd /d "%~dp0"
-start "Bot V3" cmd /k "python main.py"
+REM ==============================
+REM [4/4] Bot
+REM ==============================
+echo [4/4] Starting Kairos...
+start "Kairos" cmd /k "python main.py"
 
 echo.
 echo ====================================
-echo    V3 Started! Check Telegram
+echo    Started. Check Telegram.
 echo ====================================
 pause

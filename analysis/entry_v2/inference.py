@@ -212,37 +212,60 @@ def predict_with_entry_v2(
 
     _load_everything()
     booster = _cached.get("booster")
-    if booster is None:
-        return {"p_win": 0.0, "available": False}
+    from analysis.models import entry_feature_contract as contract
 
-    # Temporary feature vector consistent with legacy main inputs.
-    # v2 feature_schema will replace this mapping with the exact feature order.
+    def _as_dict(result) -> dict:
+        return {
+            "p_win": result.p_win,
+            "available": result.available,
+            "status": result.status,
+            "reason": result.reason,
+        }
+
+    if booster is None:
+        cached_artifacts = _cached.get("artifacts")
+        model_path = cached_artifacts.model_path if cached_artifacts is not None else "<unresolved>"
+        return _as_dict(contract.model_missing(f"entry_v2 booster not loadable from {model_path}"))
+
+    # This vector is an acknowledged placeholder — see the note above the
+    # function. It supplies the same 10 legacy scalars as the v1 path, while
+    # the trained entry_v2 artifact expects the 65-feature schema in
+    # models/entry_v2/feature_schema.json. The contract check below is what
+    # stops that mismatch from silently producing a tradeable number.
+    features = [
+        float(rsi or 0),
+        float(atr or 0),
+        float(macd or 0),
+        float(trend_strength or 0),
+        float(trend_score or 50),
+        float(momentum_score or 50),
+        float(volatility_score or 50),
+        float(0.0),  # regime placeholder
+        float(0.0),  # session placeholder
+        float(1.0) if str(direction).lower().startswith("buy") else float(0.0),
+    ]
+
+    model_contract = contract.contract_from_booster(booster, model_version="entry_v2")
+    reason = contract.validate_features(features, model_contract)
+    if reason is not None:
+        return _as_dict(contract.invalid(reason, model_contract))
+
     try:
         import xgboost as xgb  # type: ignore
         import numpy as np  # type: ignore
 
-        features = [
-            float(rsi or 0),
-            float(atr or 0),
-            float(macd or 0),
-            float(trend_strength or 0),
-            float(trend_score or 50),
-            float(momentum_score or 50),
-            float(volatility_score or 50),
-            float(0.0),  # regime placeholder
-            float(0.0),  # session placeholder
-            float(1.0) if str(direction).lower().startswith("buy") else float(0.0),
-        ]
-
         dmat = xgb.DMatrix(np.asarray([features], dtype=float))
         raw_pred = float(booster.predict(dmat)[0])
-
         p_cal = _apply_calibration(raw_pred, _cached.get("calibration"))
         p_cal = float(max(0.0, min(1.0, p_cal)))
-
-        return {"p_win": p_cal, "available": True, "raw_score": raw_pred}
-
     except Exception as e:
-        logger.warning("entry_v2 predict failed: %s", e)
-        return {"p_win": 0.0, "available": False}
+        return _as_dict(contract.prediction_error(f"{type(e).__name__}: {e}", model_contract))
+
+    bad = contract.validate_probability(p_cal)
+    if bad is not None:
+        return _as_dict(contract.prediction_error(bad, model_contract))
+
+    result = _as_dict(contract.ok(p_cal, model_contract))
+    result["raw_score"] = raw_pred
+    return result
 

@@ -25,7 +25,13 @@ class TradeMonitor:
     def get_open_positions(self) -> List[Dict[str, Any]]:
         if mt5 is None:
             return []
-        positions = mt5.positions_get()
+        # Runs every POST_ENTRY_LOOP_INTERVAL_SEC (5s) alongside the main
+        # cycle, reconciliation and the watchdog, so it must take the shared
+        # session lock rather than racing them on the single IPC channel.
+        from data.market.mt5_session import mt5_call
+
+        with mt5_call():
+            positions = mt5.positions_get()
         out: List[Dict[str, Any]] = []
         if not positions:
             return out

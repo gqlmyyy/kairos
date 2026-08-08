@@ -12,7 +12,10 @@ except Exception:
     mt5 = None
 
 from utils.logger import get_logger
-from data.storage.database import init_db, save_trade, save_decision, get_daily_stats, get_open_trades
+from data.storage.database import (
+    init_db, save_trade, save_decision, get_daily_stats, get_open_trades,
+    get_total_open_trades,
+)
 from data.news.fetcher import fetch_rss_news
 from data.news.calendar import is_high_impact_soon
 from data.news.scoring import filter_relevant_news
@@ -43,6 +46,8 @@ from decision.confidence_engine import calculate_confidence
 from risk.risk_engine import can_trade
 from risk.position_sizing import calculate_position_size
 from risk.risk_governor import get_risk_governor
+from risk.trade_gate import TradeRequest, validate_trade_request
+from execution.order_validation import validate_market_data
 from trade_management import TradeManagementOrchestrator
 from data.market.candle_boundary import get_last_completed_candle_time
 from config import TF_DECISION
@@ -407,11 +412,17 @@ def run_cycle():
             "BLOCKING new entries until MT5 is restored. "
             "Open position management continues in PostEntryManager."
         )
-        # Use Risk Governor halt mechanism to block new entries
+        # Use Risk Governor halt mechanism to block new entries.
+        #
+        # The `return` below already blocks *this* cycle regardless of whether
+        # halt() succeeds — current_candle_ts is None is re-checked every
+        # cycle independently. What a swallowed failure here would hide is the
+        # halt not persisting, so an operator watching for a halt notification
+        # would not see one during a real MT5 outage.
         try:
             governor.halt("MT5 connection lost - candle boundary unavailable", source="mt5_disconnect")
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.error(f"[INTRABAR] risk governor halt() failed during MT5 outage: {exc}")
         return
     if current_candle_ts == _last_candle_ts:
         logger.info("[INTRABAR] Same candle - skipping new entry signals (management continues in PostEntryManager)")
@@ -607,6 +618,18 @@ def run_cycle():
                 trend_strength=mtf.strength if isinstance(mtf.strength, (int, float)) else None,
             )
 
+            # ATR and equity feed every downstream number: the stop distance,
+            # the target, the lot size and the risk amount. A NaN here does not
+            # fail — it propagates silently, because NaN survives arithmetic and
+            # loses every comparison. Reject it where it enters, so the log names
+            # the input instead of an unexplained rejection three steps later.
+            market_check = validate_market_data(atr=atr, equity=equity)
+            if not market_check.ok:
+                logger.error(
+                    f"[TM_L1] {symbol}: refusing to size a trade — {market_check.reason}"
+                )
+                continue
+
             try:
                 protection = TradeManagementOrchestrator.compute_entry_protection(
                     symbol, atr, regime_name, account_equity=equity, settings=tm_settings
@@ -669,50 +692,68 @@ def run_cycle():
             model_available = v2_result["available"]
 
 
-            reject_reason = None
-            final_decision_valid = False
+            # ============================================================
+            # Single authoritative pre-trade gate.
+            #
+            # This replaces an inline boolean expression that mixed several
+            # unrelated conditions and, critically, never consulted the Risk
+            # Governor's per-trade ceiling — check_entry_gate and
+            # can_open_new_position had zero live call sites. Everything now
+            # goes through validate_trade_request, which fails closed.
+            # ============================================================
+            threshold = None
+            if ENTRY_MODEL_VERSION == "v2":
+                try:
+                    from analysis.entry_v2.inference import get_entry_threshold
 
-            if not model_available:
-                reject_reason = "model_available=False"
-                final_decision_valid = False
-            else:
-                threshold = None
-                if ENTRY_MODEL_VERSION == "v2":
-                    try:
-                        from analysis.entry_v2.inference import get_entry_threshold
+                    threshold = get_entry_threshold()
+                except Exception:
+                    threshold = None
+            if threshold is None:
+                threshold = 0.60
 
-                        threshold = get_entry_threshold()
-                    except Exception:
-                        threshold = None
+            size_multiplier = (
+                get_size_multiplier(xgboost_p_win) if xgboost_p_win is not None else 0.0
+            )
 
-                if threshold is None:
-                    threshold = 0.60
+            try:
+                open_position_count = get_total_open_trades()
+            except Exception as e:
+                logger.error(f"[TRADE_GATE] cannot read open trade count: {e}")
+                open_position_count = None
 
-                if not should_trade_v2(xgboost_p_win, threshold=threshold):
-                    reject_reason = f"p_win<threshold (p_win={xgboost_p_win:.3f} threshold={threshold})"
-                    final_decision_valid = False
-
-                else:
-                    size_multiplier = get_size_multiplier(xgboost_p_win)
-                    if size_multiplier <= 0:
-                        reject_reason = "size_multiplier<=0"
-                        final_decision_valid = False
-                    else:
-                        # position_size adjusted by multiplier
-                        final_decision_valid = bool(
-                            signal_is_valid
-                            and risk_passed
-                            and sl_tp_calculated
-                            and position_size is not None
-                            and position_size > 0
-                            and size_multiplier > 0
-                        )
+            gate_result = validate_trade_request(
+                TradeRequest(
+                    symbol=symbol,
+                    direction=direction,
+                    final_score=final_score,
+                    ai_confidence=ai_confidence,
+                    confidence=confidence,
+                    equity=equity,
+                    position_size=position_size,
+                    sl_distance=sl_distance,
+                    tp_distance=tp_distance,
+                    signal_is_valid=signal_is_valid,
+                    ml_available=model_available,
+                    ml_p_win=xgboost_p_win,
+                    ml_threshold=threshold,
+                    ml_status=v2_result.get("status", ""),
+                    size_multiplier=size_multiplier,
+                    open_position_count=open_position_count,
+                    risk_passed=risk_passed,
+                    risk_reason=risk_reason,
+                )
+            )
+            final_decision_valid = gate_result.allowed
+            reject_reason = gate_result.reason or None
 
             logger.info(
                 f"[VERIFY][DECISION_TRUTH] bias={ai.bias} score={final_score} confidence={confidence} "
                 f"vote={direction} risk_passed={risk_passed} sl_tp_calculated={sl_tp_calculated} "
                 f"position_size={position_size} xgboost_p_win={xgboost_p_win} "
-                f"final_decision_valid={final_decision_valid} reject_reason={reject_reason or risk_reason}"
+                f"ml_status={v2_result.get('status', '')} "
+                f"final_decision_valid={final_decision_valid} reject_reason={reject_reason or risk_reason} "
+                f"gate_checks={','.join(gate_result.checks)}"
             )
 
             if not final_decision_valid:
@@ -767,7 +808,15 @@ def run_cycle():
             # Send distances to open_trade - it will calculate final SL/TP
             # from live MT5 price to eliminate price discrepancy
             # ============================================================
-            result = open_trade(symbol, direction, position_size, sl_distance, tp_distance, ai.reason[:80])
+            # current_candle_ts identifies the logical signal: every symbol in
+            # this cycle shares the candle that triggered it, and a re-run for
+            # the same candle produces the same identity. That is what lets the
+            # executor recognise a position left behind by a lost reply instead
+            # of opening a second one.
+            result = open_trade(
+                symbol, direction, position_size, sl_distance, tp_distance,
+                ai.reason[:80], signal_ts=current_candle_ts,
+            )
             logger.info(f"[VERIFY][EXECUTION_RESULT] symbol={symbol} open_trade_result={result}")
 
             if result is not None and isinstance(result, dict) and result.get("status") == "success" and result.get("order_id"):
@@ -797,7 +846,6 @@ def run_cycle():
                     "expected_news_impact_score": features.get("news_impact_score", None),
                     "expected_entry": entry_price,
                     "expected_spread": features.get("spread", None),
-                    "expected_final_score": features.get("expected_final_score", final_score),
                 }
 
                 required_non_null = [

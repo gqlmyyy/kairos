@@ -24,7 +24,10 @@ from core.heartbeat import beat
 from data.storage.database import (
     close_trade_db_by_order_id,
     get_execution_dataset,
+    parse_partial_levels_done,
+    update_breakeven_done,
     update_execution_mfe_mae,
+    update_partial_levels_done,
 )
 from trade_management import TradeContext, TradeManagementOrchestrator
 from trade_management.layer1_intrabar import bars_since
@@ -122,10 +125,17 @@ class PostEntryManager:
 
         state = TradeRuntimeState(initial_volume, profile, settings)
         state.breakeven_done = bool(db_row.get("breakeven_done") or 0)
+        # Restore ladder progress from the database. Without this a restart
+        # re-arms a level that already executed and takes the partial twice.
+        state.partial_levels_done = parse_partial_levels_done(
+            db_row.get("partial_levels_done")
+        )
         self._state[order_id] = state
         logger.info(
-            "[POST_ENTRY] registered ticket=%s symbol=%s profile=%s initial_volume=%.2f",
+            "[POST_ENTRY] registered ticket=%s symbol=%s profile=%s initial_volume=%.2f "
+            "breakeven_done=%s partial_levels_done=%s",
             order_id, pos.get("symbol"), profile, initial_volume,
+            state.breakeven_done, sorted(state.partial_levels_done) or "none",
         )
         return state
 
@@ -363,8 +373,24 @@ class PostEntryManager:
         if outcome.close_fraction > 0:
             volume = ctx.initial_volume * outcome.close_fraction
             if self._executor.partial_close(order_id, volume):
+                # Broker confirmed. Record the level in memory AND on disk
+                # before anything else can interrupt: if the process dies
+                # between the close and the write, the restart would retake it.
                 if outcome.partial_level_index is not None:
                     state.partial_levels_done.add(outcome.partial_level_index)
+                    persisted = update_partial_levels_done(
+                        order_id, state.partial_levels_done
+                    )
+                    if not persisted:
+                        # The close already happened at the broker; we cannot
+                        # undo it. Flag loudly — a restart before the next
+                        # successful write would retake this level.
+                        logger.error(
+                            "[POST_ENTRY] partial close EXECUTED for ticket=%s level=%s "
+                            "but persisting ladder state FAILED. A restart before the "
+                            "next write could repeat this level.",
+                            order_id, outcome.partial_level_index,
+                        )
                 logger.info(
                     "[POST_ENTRY] partial close ticket=%s volume=%.2f level=%s",
                     order_id, volume, outcome.partial_level_index,
@@ -381,6 +407,9 @@ class PostEntryManager:
             ):
                 if any("breakeven" in r for r in req.reasons):
                     state.breakeven_done = True
+                    # Persist so a restart does not re-arm break-even on a
+                    # trade whose stop is already there.
+                    update_breakeven_done(order_id, True)
                 if req.new_sl is not None:
                     self._bus.publish(
                         SLModifiedEvent(

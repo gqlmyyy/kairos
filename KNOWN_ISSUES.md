@@ -8,6 +8,68 @@ Planned follow-up work lives in `ROADMAP.md`.
 
 ---
 
+## 0. THE ENTRY MODEL CURRENTLY GATES SHUT ON EVERY SIGNAL — the bot cannot open a trade
+
+**Severity: blocks all trading. Read this before anything else in this file.**
+
+**Verified empirically** (2026-08-08, remediation branch), by calling the real
+production function directly:
+
+```
+$ python3 -c "
+from analysis.models.xgboost_v2_inference import predict_with_v2
+print(predict_with_v2(rsi=55.0, atr=0.0012, macd=0.0, trend_strength=50.0,
+    trend_score=50.0, momentum_score=50.0, volatility_score=50.0,
+    market_regime='trending', direction='BUY'))
+"
+[ML_GATE] ML_GATE_INVALID — entry BLOCKED. reason=feature count mismatch: model expects 65, got 10
+{'p_win': None, 'available': False, 'status': 'ML_GATE_INVALID', 'reason': '...'}
+```
+
+Every call, for every symbol, every cycle, returns `ML_GATE_INVALID`. In
+`risk/trade_gate.py`, `ml_available=False` is an unconditional REJECT. **No
+signal can currently pass the ML gate, so no trade can currently open**, via
+either entry path:
+
+- `ENTRY_MODEL_VERSION=v1` (the default): `predict_with_v2()` in
+  `analysis/models/xgboost_v2_inference.py` sends the 10 legacy scalar
+  features (`LIVE_FEATURE_NAMES`), but `models/entry/entry_model.json` on disk
+  expects 65 (`booster.num_features() == 65`).
+- `ENTRY_MODEL_VERSION=v2`: `predict_with_entry_v2()` in
+  `analysis/entry_v2/inference.py` sends the *same* 10 legacy scalars — its own
+  docstring calls this "a placeholder until feature_schema v2 is implemented" —
+  even though `analysis/entry_v2/feature_schema.py::FEATURE_COLUMNS` defines
+  the full 65-feature schema the model file was almost certainly trained on
+  (65 matches exactly). **No live code path currently builds that 65-feature
+  vector from live market data — the schema exists, the model exists, nothing
+  connects them at inference time.**
+
+**Why this is not a regression from this remediation.** Before C-01, this same
+mismatch existed and was *not* checked — `predict_with_v2` fed 10 values into a
+65-feature model and returned a prediction anyway (`booster.predict()` silently
+zero-fills missing feature slots). C-01 added the contract check
+(`analysis/models/entry_feature_contract.py`) specifically to stop that: an
+unverified prediction from a mismatched model must not size a live trade. The
+gate is doing exactly its job. What C-01 does not do, and was never scoped to
+do, is fix the mismatch itself — that requires either retraining
+`entry_model.json` on the 10-feature legacy vector, or finishing the entry_v2
+feature-engineering pipeline so it actually produces the 65 features live and
+switching `ENTRY_MODEL_VERSION` to `v2`. Both are real modeling work, not a
+remediation-scope code fix, and touch entry-signal generation — explicitly
+out of scope for this remediation without separate sign-off.
+
+**Before resuming live trading on this branch**, resolve one of:
+1. Retrain `models/entry/entry_model.json` on the current 10-feature
+   `LIVE_FEATURE_NAMES` vector (fast; matches what's actually available today), or
+2. Finish `analysis/entry_v2/inference.py`'s feature builder to emit the real
+   65 features from `feature_schema.FEATURE_COLUMNS` using live market data,
+   and switch `ENTRY_MODEL_VERSION=v2`.
+
+Until then, running the bot is safe (nothing opens on a bad prediction) but
+non-functional (nothing opens at all).
+
+---
+
 ## 1. `MAX_OPEN_TRADES = 3` is unreachable — the bot is effectively single-trade
 
 **Location:** `main.py:425-449` (guard), `config.py:62` (setting)
@@ -129,34 +191,36 @@ Re-enabling a valid model restores the 47.06% share with no config change.
 
 ---
 
-## 5. `config.py` crashes on an empty `MT5_LOGIN` — operational risk
+## 5. `config.py` crashes on an empty `MT5_LOGIN` — FIXED
 
-**Location:** `config.py:30`
+**Location:** `config.py`
+
+Was:
 
 ```python
 MT5_LOGIN = int(os.getenv("MT5_LOGIN", "110609311"))
 ```
 
-**What happens:** `os.getenv(name, default)` returns the default only when the
-variable is *absent*. A present-but-empty `MT5_LOGIN=` yields `int("")` and a
-`ValueError` **at import time**.
+`os.getenv(name, default)` returns the default only when the variable is
+*absent*. A present-but-empty `MT5_LOGIN=` yielded `int("")` and a
+`ValueError` at import time, in a module every entry point imports, before any
+logging existed. This was a live hazard: the `.env` on disk had `MT5_LOGIN=`
+empty, so deploying it — the normal outcome of copying `.env.example` — took
+the whole bot down.
 
-**Why this is an operational risk, not a cosmetic bug:** `config.py` is imported
-by every entry point in the project — `main.py`, every script, every test. An
-empty value does not degrade one feature; it prevents the process from starting
-at all, before any logging is configured, with a bare `ValueError` traceback that
-does not name the variable.
+**Fix (M-01/M-03 remediation pass):** every `config.py` read now goes through
+`_env_str`/`_env_int`/`_env_float`, which treat empty/whitespace-only the same
+as absent and fall back to the default; a genuinely malformed value (e.g.
+`MT5_LOGIN=abc`) raises with the variable's name in the message instead of a
+bare `ValueError`. The hardcoded credential fallbacks (a live DeepSeek key, a
+Telegram bot token, an MT5 login/password) that used to ship as defaults in
+this file are also gone — every credential now defaults to `""`/`0`, so a
+missing `.env` fails loudly (`mt5_session.ensure_session` names exactly which
+variables are missing) instead of silently authenticating against whatever
+account happened to be hardcoded.
 
-This is a live hazard: the `.env` currently on disk has `MT5_LOGIN=` empty.
-Deploying an empty or partially-filled `.env` — the normal outcome of copying
-`.env.example` — takes the whole bot down. It was hit during verification of
-this branch and had to be worked around with an environment override.
-
-**The same pattern affects every numeric setting read this way**, so check for
-others before fixing just this line.
-
-**If fixing:** `int(os.getenv("MT5_LOGIN") or "110609311")`, or a small helper
-that treats empty strings as absent for all numeric config reads.
+Tests: `tests/test_config_single_source.py` (`TestEmptyEnvironmentVariables`,
+`TestIncompleteCredentialsFailClosed`).
 
 ---
 

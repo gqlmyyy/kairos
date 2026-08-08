@@ -11,6 +11,13 @@ except Exception:
 
 from utils.logger import get_logger
 from config import MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
+from execution.order_idempotency import (
+    ExecutionRecord,
+    ExecutionState,
+    SignalIdentity,
+    may_send_another_order,
+    resolve_unknown_outcome,
+)
 
 from data.storage.database import close_trade_db_by_order_id, upsert_execution_actual
 
@@ -35,6 +42,22 @@ def _ensure_symbol_selected(symbol: str) -> bool:
     from data.market.mt5_session import ensure_symbol
 
     return ensure_symbol(symbol)
+
+
+def _positions_for_symbol(symbol: str):
+    """Broker positions for one symbol, via the shared session lock.
+
+    Injected into the idempotency reconciler so it can be exercised in tests
+    without a live terminal. Raising on failure is deliberate: an unreadable
+    broker is not evidence that an order did not execute.
+    """
+    from data.market.mt5_session import mt5_call
+
+    with mt5_call():
+        positions = mt5.positions_get(symbol=symbol)
+    if positions is None:
+        raise RuntimeError(f"positions_get returned None for {symbol}")
+    return list(positions)
 
 
 def _get_positions_qd_like_dicts() -> list:
@@ -339,44 +362,26 @@ def _validate_and_adjust_sl_tp(symbol: str, live_price: float, sl: float, tp: fl
 
 
 def _validate_sl_tp_order(live_price: float, sl: float, tp: float, direction: str) -> bool:
-    """Validate that SL/TP are on the correct side of live_price.
-    
-    Args:
-        live_price: Current MT5 price (ask for BUY, bid for SELL)
-        sl: Stop loss price
-        tp: Take profit price
-        direction: "BUY" or "SELL"
-    
-    Returns:
-        True if valid, raises ValueError if invalid
+    """Validate that SL/TP are finite and on the correct side of live_price.
+
+    Delegates to execution.order_validation, which is where the rules live and
+    where they are tested. This wrapper stays because the raising signature is
+    what open_trade's caller expects.
+
+    The previous implementation compared with ``>=`` / ``<=``. Comparisons
+    against NaN are all False, so a NaN stop loss passed every branch and was
+    sent to the broker, opening a live position with no protective stop.
     """
-    if direction == "BUY":
-        if sl >= live_price:
-            raise ValueError(
-                f"[SAFETY] BUY order invalid: SL ({sl}) must be < live_price ({live_price}). "
-                f"This indicates a price discrepancy between data source and MT5."
-            )
-        if tp <= live_price:
-            raise ValueError(
-                f"[SAFETY] BUY order invalid: TP ({tp}) must be > live_price ({live_price}). "
-                f"This indicates a price discrepancy between data source and MT5."
-            )
-    else:  # SELL
-        if sl <= live_price:
-            raise ValueError(
-                f"[SAFETY] SELL order invalid: SL ({sl}) must be > live_price ({live_price}). "
-                f"This indicates a price discrepancy between data source and MT5."
-            )
-        if tp >= live_price:
-            raise ValueError(
-                f"[SAFETY] SELL order invalid: TP ({tp}) must be < live_price ({live_price}). "
-                f"This indicates a price discrepancy between data source and MT5."
-            )
-    
+    from execution.order_validation import validate_order_prices
+
+    result = validate_order_prices(live_price, sl, tp, direction)
+    if not result.ok:
+        raise ValueError(f"[SAFETY] order rejected: {result.reason}")
     return True
 
 
-def open_trade(symbol, direction, size, sl_distance, tp_distance, reason) -> dict:
+def open_trade(symbol, direction, size, sl_distance, tp_distance, reason,
+               signal_ts: int = None) -> dict:
     """Open a market deal directly through MT5.
 
     Args:
@@ -386,6 +391,11 @@ def open_trade(symbol, direction, size, sl_distance, tp_distance, reason) -> dic
         sl_distance: Stop loss distance in price units (NOT absolute price)
         tp_distance: Take profit distance in price units (NOT absolute price)
         reason: Trade reason/comment (max 31 chars, ASCII only)
+        signal_ts: timestamp identifying the logical signal (candle close time).
+            Retries of the same signal must pass the same value — it is what
+            makes the magic number stable and broker-side reconciliation
+            possible. Defaults to now, which is safe for a single attempt but
+            gives no protection across separate calls.
     
     Returns:
         dict with status, order_id, price, etc.
@@ -405,6 +415,30 @@ def open_trade(symbol, direction, size, sl_distance, tp_distance, reason) -> dic
         f"sl_distance={sl_distance} tp_distance={tp_distance}"
     )
 
+    # 0) Numeric sanity, before anything else touches the broker.
+    #
+    # A NaN or Inf reaching this function used to survive all the way to
+    # order_send: the downstream check compared with >= / <=, and every
+    # comparison against NaN is False. Checked here as well so a bad value is
+    # rejected before a session is opened or a symbol is selected, and the
+    # rejection names the field rather than surfacing as a broker error code.
+    from execution.order_validation import validate_order_inputs
+
+    input_check = validate_order_inputs(symbol, direction, size, sl_distance, tp_distance)
+    if not input_check.ok:
+        logger.error("[MT5_DIRECT] refusing to build order: %s", input_check.reason)
+        return {
+            "status": "error",
+            "error": f"invalid order inputs: {input_check.reason}",
+            "order_id": None,
+            "price": None,
+            "symbol": symbol,
+            "direction": direction,
+            "volume": None,
+            "timestamp": time.time(),
+            "raw_response": {},
+        }
+
     if mt5 is None:
         return {
             "status": "error",
@@ -418,30 +452,19 @@ def open_trade(symbol, direction, size, sl_distance, tp_distance, reason) -> dic
             "raw_response": {},
         }
 
-    # 1) Ensure initialize success with credentials
-    try:
-        initialized = mt5.initialize(login=MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
-    except Exception as e:
-        err = str(e)
-        logger.error(f"[MT5_DIRECT] mt5.initialize exception: {err}")
+    # 1) Ensure the shared session is live.
+    # This used to call mt5.initialize() with credentials directly, competing
+    # with the session that mt5_session owns and the other threads use.
+    if not _ensure_mt5_initialized():
+        last_err = None
+        try:
+            last_err = mt5.last_error()
+        except Exception:
+            pass
+        logger.error(f"[MT5_DIRECT] MT5 session unavailable last_error={last_err}")
         return {
             "status": "error",
-            "error": err,
-            "order_id": None,
-            "price": None,
-            "symbol": symbol,
-            "direction": direction,
-            "volume": float(size) if size is not None else None,
-            "timestamp": time.time(),
-            "raw_response": {},
-        }
-
-    if not initialized:
-        last_err = mt5.last_error()
-        logger.error(f"[MT5_DIRECT] mt5.initialize failed last_error={last_err}")
-        return {
-            "status": "error",
-            "error": f"mt5.initialize failed: {last_err}",
+            "error": f"MT5 session unavailable: {last_err}",
             "order_id": None,
             "price": None,
             "symbol": symbol,
@@ -654,10 +677,36 @@ def open_trade(symbol, direction, size, sl_distance, tp_distance, reason) -> dic
     
     last_result = None
     last_error = None
-    
+
+    # ------------------------------------------------------------------
+    # Idempotency: one logical signal -> at most one executed position.
+    #
+    # The loop below tries several filling modes. Previously an exception or a
+    # None result simply `continue`d to the next mode — but both mean "outcome
+    # unknown", not "order failed". If the broker executed and the reply was
+    # lost (198 such IPC failures in the live logs), the next iteration opened a
+    # second position. Every retry now reconciles with the broker first.
+    # ------------------------------------------------------------------
+    identity = SignalIdentity(
+        symbol=symbol,
+        direction=str(direction),
+        signal_ts=int(signal_ts if signal_ts is not None else time.time()),
+    )
+    record = ExecutionRecord(identity=identity)
+    logger.info(
+        f"[MT5_DIRECT] signal={identity.key} magic={identity.magic}"
+    )
+
     for filling_value, filling_name in available_filling_modes:
+        allowed, deny_reason = may_send_another_order(record)
+        if not allowed:
+            logger.error(f"[MT5_DIRECT] submission blocked: {deny_reason}")
+            break
+
         logger.info(f"[MT5_DIRECT] Attempting order with filling_mode={filling_name} ({filling_value})")
-        
+        record.attempts += 1
+        record.transition(ExecutionState.SUBMITTING, f"attempt {record.attempts} ({filling_name})")
+
         request = {
             "action": mt5.TRADE_ACTION_DEAL,
             "symbol": symbol,
@@ -667,7 +716,9 @@ def open_trade(symbol, direction, size, sl_distance, tp_distance, reason) -> dic
             "sl": sl,
             "tp": tp,
             "deviation": 20,
-            "magic": 0,
+            # Deterministic per signal, so a lost reply can still be traced to
+            # the position it created.
+            "magic": identity.magic,
             # MT5 validates comment strictly:
             # - ASCII/latin only
             # - max length 31
@@ -680,18 +731,59 @@ def open_trade(symbol, direction, size, sl_distance, tp_distance, reason) -> dic
 
         # Send request
         result = None
+        ambiguous = None
         try:
             result = mt5.order_send(request)
         except Exception as e:
             logger.error(f"[MT5_DIRECT] order_send exception with {filling_name}: {e}")
             last_error = str(e)
-            continue
+            ambiguous = f"exception: {e}"
 
-        # Handle result None
-        if result is None:
+        # A None result is an UNKNOWN outcome, not a failure.
+        if ambiguous is None and result is None:
             error_info = mt5.last_error()
             logger.error(f"[MT5_DIRECT] order_send returned None with {filling_name} last_error={error_info}")
             last_error = f"order_send returned None: last_error={error_info}"
+            ambiguous = f"order_send returned None: {error_info}"
+
+        if ambiguous is not None:
+            record.transition(ExecutionState.UNKNOWN, ambiguous)
+            outcome = resolve_unknown_outcome(record, _positions_for_symbol)
+
+            if outcome is ExecutionState.CONFIRMED_EXECUTED:
+                # The order did reach the broker. Report success rather than
+                # retrying — a retry here is exactly the duplicate-order bug.
+                logger.warning(
+                    f"[MT5_DIRECT] ambiguous reply but position CONFIRMED at broker "
+                    f"ticket={record.order_id} — not retrying"
+                )
+                return {
+                    "status": "success",
+                    "order_id": str(record.order_id),
+                    "price": price_float,
+                    "symbol": symbol,
+                    "direction": direction,
+                    "volume": size,
+                    "timestamp": time.time(),
+                    "recovered_from_ambiguous_response": True,
+                    "raw_response": {"reconciled": True, "magic": identity.magic},
+                }
+
+            if outcome is ExecutionState.UNKNOWN:
+                # Cannot prove non-execution. Refuse to send again.
+                logger.error(
+                    "[MT5_DIRECT] outcome unresolvable and broker unreachable — "
+                    "aborting to avoid a duplicate position"
+                )
+                return {
+                    "status": "error",
+                    "error": "ambiguous_execution_unresolved",
+                    "message": last_error,
+                    "symbol": symbol,
+                    "magic": identity.magic,
+                }
+
+            # CONFIRMED_NOT_EXECUTED — safe to try the next filling mode.
             continue
 
         raw = {}

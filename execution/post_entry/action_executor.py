@@ -338,21 +338,20 @@ class ActionExecutor:
             )
             try:
                 if mt5 is not None:
+                    # Recover through the session owner rather than calling
+                    # initialize()/login() here. Those competed with the
+                    # shared session other threads were using.
                     try:
-                        if mt5.terminal_info() is None:
-                            mt5.initialize()
-                    except Exception as e:
-                        logger.warning(
-                            f"[MT5] close_position reconnect: terminal_info/initialize exception={type(e).__name__} {e} ticket={ticket_int}"
-                        )
+                        from data.market.mt5_session import ensure_session
 
-                    try:
-                        # re-login with same creds (if supported)
-                        from config import MT5_LOGIN, MT5_PASSWORD, MT5_SERVER
-                        mt5.login(MT5_LOGIN, password=MT5_PASSWORD, server=MT5_SERVER)
+                        if not ensure_session(force_relogin=True):
+                            logger.warning(
+                                f"[MT5] close_position reconnect failed ticket={ticket_int}"
+                            )
                     except Exception as e:
                         logger.warning(
-                            f"[MT5] close_position reconnect: mt5.login exception={type(e).__name__} {e} ticket={ticket_int}"
+                            f"[MT5] close_position reconnect raised "
+                            f"{type(e).__name__}: {e} ticket={ticket_int}"
                         )
 
                     # final single attempt after reconnect
