@@ -396,27 +396,18 @@ class TestPreviouslyConstantFeaturesAreNowDynamic:
             f"scale: {buckets}"
         )
 
-    def test_the_two_atr_ratio_implementations_agree_exactly(self):
-        """mt5_client (live) and live_parity_features (training) must not drift."""
-        import random
-        from data.market.mt5_client import _atr_ratio
+    def test_there_is_only_one_atr_ratio_implementation(self):
+        """There used to be a copy in mt5_client and another in
+        live_parity_features, kept in step by a test. They are now the same
+        function, so drift is impossible rather than merely detected."""
+        import inspect
+        from data.market import mt5_client
 
-        rng = random.Random(4)
-        for _ in range(50):
-            vol = rng.choice([0.0004, 0.0012, 0.004])
-            closes = [1.1]
-            for _ in range(100):
-                closes.append(closes[-1] * (1 + rng.gauss(0, vol) / 1.1))
-            closes = closes[1:]
-            highs, lows = [], []
-            for c in closes:
-                r = abs(rng.gauss(0, vol * 0.8))
-                highs.append(c + r)
-                lows.append(c - r)
-            atr = lpf.live_atr(highs, lows, closes)
-            assert _atr_ratio(highs, lows, closes, atr) == pytest.approx(
-                lpf.live_atr_ratio(highs, lows, closes, atr), abs=1e-12
-            )
+        assert not hasattr(mt5_client, "_atr_ratio"), (
+            "mt5_client grew its own _atr_ratio again"
+        )
+        source = inspect.getsource(mt5_client.get_indicators)
+        assert "lpf.live_atr_ratio" in source
 
     def test_get_indicators_emits_the_volatility_key(self):
         """The key whose absence froze the score at 55."""
@@ -569,3 +560,121 @@ class TestEndToEndVectorParity:
 
         assert buy != sell
         assert buy[9] == 1.0 and sell[9] == 0.0
+
+
+class TestDegenerateRealWorldInput:
+    """Shapes that real MT5 data contains and that used to crash the pipeline.
+
+    A flat stretch of 14 bars — ordinary over weekends, holidays and thin
+    sessions — raised ZeroDivisionError in `live_rsi`. The guard read
+    ``if losses`` (is the list empty?) when it needed to ask whether the list
+    *sums* to zero: ``diff > 0`` sends an exact 0.0 to `losses`, so fourteen
+    zeros made a non-empty list with a zero average.
+
+    In live this raised inside get_indicators' try/except and silently returned
+    FALLBACK_INDICATORS — which is where the rsi=50.0 / atr=0.001 constants that
+    polluted the recorded dataset came from (KNOWN_ISSUES #3). It surfaced as a
+    hard crash only when the training pipeline called the same code without a
+    catch-all around it.
+    """
+
+    FLAT = [1.1000] * 20
+
+    def test_flat_series_does_not_raise(self):
+        assert lpf.live_rsi(self.FLAT) == pytest.approx(50.0)
+
+    def test_flat_series_scores_neutral_not_extreme(self):
+        """50 is the meaningful answer for "price did not move"."""
+        assert lpf.live_rsi(self.FLAT) == pytest.approx(50.0)
+
+    def test_monotonic_series_still_reaches_the_extremes(self):
+        """The epsilon must not flatten genuine one-sided moves."""
+        up = lpf.live_rsi([1.0 + i * 0.01 for i in range(20)])
+        down = lpf.live_rsi([1.2 - i * 0.01 for i in range(20)])
+        assert up > 85, up
+        assert down < 15, down
+        assert up > down
+
+    def test_normal_input_is_bit_identical_to_the_old_formula(self):
+        """The fix must only affect inputs that previously raised."""
+        import random
+
+        rng = random.Random(1)
+        closes = [1.1]
+        for _ in range(40):
+            closes.append(closes[-1] * (1 + rng.gauss(0, 0.001)))
+        closes = closes[1:]
+
+        gains, losses = [], []
+        for i in range(1, 15):
+            diff = closes[-i] - closes[-i - 1]
+            (gains if diff > 0 else losses).append(abs(diff))
+        avg_gain = sum(gains) / 14 if gains else 0.001
+        avg_loss = sum(losses) / 14 if losses else 0.001
+        old = 100 - (100 / (1 + avg_gain / avg_loss))
+
+        assert lpf.live_rsi(closes) == pytest.approx(old, abs=1e-12)
+
+    @pytest.mark.parametrize("name,closes", [
+        ("fully flat", [1.1] * 120),
+        ("flat then jump", [1.1] * 100 + [1.2] * 20),
+        ("zero prices", [0.0] * 120),
+        ("single tick move", [1.1] * 119 + [1.1001]),
+        ("huge gap", [1.1] * 60 + [50.0] * 60),
+        ("alternating", [1.1 + (0.01 if i % 2 else -0.01) for i in range(120)]),
+    ])
+    def test_full_feature_vector_survives_degenerate_input(self, name, closes):
+        candles = [{"t": 1_600_000_000 + i * 14400, "open": c, "high": c,
+                    "low": c, "close": c, "volume": 1.0}
+                   for i, c in enumerate(closes)]
+
+        ind = lpf.live_indicators(candles)
+        assert ind is not None
+
+        trend_score, trend_dir = lpf.trend_score_from_indicators(ind)
+        momentum, mom_dir = lpf.momentum_score_from_indicators(ind)
+        vol = lpf.volatility_score_from_indicators(ind)
+
+        vec = spec.build_feature_vector(
+            rsi=ind["rsi"], atr=ind["atr"], macd=ind["macd"],
+            trend_strength=lpf.mtf_strength_from_directions(trend_dir, mom_dir, mom_dir),
+            trend_score=trend_score, momentum_score=momentum,
+            volatility_score=vol,
+            market_regime=lpf.regime_from_scores(trend_dir, vol),
+            session="london", direction="BUY",
+        )
+        assert len(vec) == spec.FEATURE_COUNT
+        assert all(isinstance(v, float) for v in vec)
+        import math
+        assert all(math.isfinite(v) for v in vec), f"{name}: {vec}"
+
+    def test_zero_atr_yields_no_trade_rather_than_a_bad_label(self):
+        """A flat window gives ATR 0, so SL/TP distances collapse; such a bar
+        must be dropped, not labelled."""
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "scripts"))
+        import train_entry_model as trainer
+
+        candles = [{"t": 1_600_000_000 + i * 14400, "open": 1.1, "high": 1.1,
+                    "low": 1.1, "close": 1.1, "volume": 1.0} for i in range(140)]
+        assert trainer.simulate_trade(candles, 100, "BUY", 0.0, 20) is None
+
+
+class TestSingleIndicatorImplementation:
+    """The live client must not keep its own copy of the arithmetic."""
+
+    def test_mt5_client_delegates_to_the_shared_module(self):
+        import inspect
+        from data.market.mt5_client import get_indicators
+
+        source = inspect.getsource(get_indicators)
+        assert "lpf.live_rsi" in source
+        assert "lpf.live_atr" in source
+        assert "lpf.live_macd" in source
+        # And no second copy of the RSI arithmetic.
+        assert "avg_gain" not in source, (
+            "mt5_client has its own RSI again; two copies of the same formula "
+            "is how training and serving drift apart"
+        )

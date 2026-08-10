@@ -259,32 +259,49 @@ affected.
 
 ---
 
-## 9. RSI formula divides by zero on a perfectly flat series
+## 9. RSI divided by zero on a flat series — FIXED
 
-**Location:** `data/market/mt5_client.py` `get_indicators()` (inherited verbatim
-from the former `data/market/client.py`)
+**Location:** `analysis/features/live_parity_features.py::live_rsi`, now the
+single implementation, imported by `data/market/mt5_client.get_indicators`.
 
-**What happens:** when every close in the window is identical, all 14
-differences are zero. The classifier `(gains if diff > 0 else losses)` sends all
-of them to `losses`, so `avg_gain` falls back to `0.001` while `avg_loss`
-computes as a genuine `0.0`, and `rs = avg_gain / avg_loss` raises
-`ZeroDivisionError`. The surrounding `except` catches it and the function
-returns `FALLBACK_INDICATORS` — i.e. `rsi=50.0`, `atr=0.0008`.
+**What happened:** when every close in the window is identical, all 14
+differences are zero. `(gains if diff > 0 else losses)` sends an exact `0.0` to
+`losses`, so the list was **non-empty but summed to zero**. The guard read
+`if losses` — "is the list empty?" — when the question was whether its average
+was zero. `avg_loss` became `0.0` and `rs = avg_gain / avg_loss` raised
+`ZeroDivisionError`.
 
-**Why it matters:** this is exactly the stale-feed condition observed in
-production, where ATR was byte-identical for hours. A frozen feed does not
-merely repeat the last real reading; past a certain point it silently
-substitutes fallback constants, and downstream `p_win` is then computed from
-placeholders rather than market data.
+**Why it mattered more than it looked.** In live the exception was caught by
+`get_indicators`' `except` and the function returned `FALLBACK_INDICATORS`:
+`rsi=50.0`, `atr=0.0008`. That is the origin of the constant `entry_rsi = 50.0`
+and `entry_atr = 0.0010` values that make the recorded `execution_dataset`
+degenerate (issue 3) — the pipeline was not recording the market, it was
+recording its own fallback table. Flat stretches are ordinary in real data:
+weekends, holidays, thin sessions, frozen feeds.
 
-**Why it was not fixed here:** the QuantDinger removal deliberately preserved
-every indicator formula byte-for-byte so the entry model's input distribution
-would not shift (see the module docstring). Changing the RSI is a separate,
-deliberate change that needs retraining. Pinned by
-`tests/test_mt5_client.py::TestIndicatorFormulas::test_perfectly_flat_series_falls_back`.
+It surfaced as a hard crash only when the training pipeline called the same
+formula without a catch-all around it, on real MT5 H1 candles.
 
-**If fixing:** guard the division (`avg_loss = max(avg_loss, 1e-9)`) and only
-route a difference to `losses` when it is strictly negative, then retrain.
+**Fix:** apply the epsilon the original author intended to a zero *average*
+rather than an empty list:
+
+```python
+avg_gain = (sum(gains) / 14) or 0.001
+avg_loss = (sum(losses) / 14) or 0.001
+```
+
+A flat window now scores RSI 50 (rs = 1 — price did not move), an all-up window
+~100 and an all-down window ~0. Inputs that did not previously raise are
+bit-identical, so the feature distribution does not shift.
+
+**Also fixed here:** `mt5_client` no longer keeps its own copy of the RSI, ATR,
+MACD, ma_trend and volatility arithmetic. It imports them from
+`live_parity_features`, the same module the training pipeline uses, so the two
+cannot drift apart — the failure mode behind the original 65-vs-10 mismatch.
+
+Tests: `tests/test_entry_feature_parity.py::TestDegenerateRealWorldInput` (11),
+`::TestSingleIndicatorImplementation`, and
+`tests/test_mt5_client.py::TestIndicatorFormulas::test_perfectly_flat_series_is_computed_not_faked`.
 
 ---
 
