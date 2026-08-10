@@ -396,3 +396,67 @@ trade either way.
 
 **If fixing:** make the cap ATR-relative (e.g. `max_sl = k * ATR`) or set it
 per-symbol, rather than a single pip count shared across instrument classes.
+
+---
+
+## 13. Three of the entry model's ten features are constants in production
+
+Found while rebuilding the entry-model training pipeline. Each was verified by
+calling the live functions directly, not by reading the code.
+
+| Feature | Value in live | Cause |
+|---|---|---|
+| `trend_strength` | always `0.0` | `main.py` passes `mtf.strength if isinstance(mtf.strength, (int, float)) else 0.0`, but `MultiTimeframeData.strength` is a *string* (`"strong"`/`"moderate"`/`"weak"`), so the guard never passes |
+| `volatility_score` | always `55.0` | `get_volatility_score_from_snapshot` reads `data.get("volatility", "")`, but `mt5_client.get_indicators` returns only rsi/atr/macd/ma_trend/close — the key does not exist on any path, so every lookup falls to the final `else` |
+| `market_regime` | always `TRENDING` (`1.0`) | `ma_trend` only returns `"sideways"` when `price == ma20` *exactly* (0 hits in 200,000 random draws), so the H4 trend direction is never `"neutral"`; the HIGH/LOW_VOLATILITY branches are unreachable because they test `volatility_score`, frozen at 55 by the row above |
+
+The third is confirmed independently by production logs: every cycle, for all
+three symbols, logged `regime=TRENDING`.
+
+**Consequence for the model:** it has ten input slots but only **seven** carry
+information — `rsi`, `atr`, `macd`, `trend_score`, `momentum_score`, `session`,
+`direction`.
+
+**Consequence beyond the model:** because the regime is always TRENDING, Layer 6
+can only ever select the `trend` or `breakout` profile — `mean_reversion` and
+`range` are unreachable — and Layer 1 always applies the trending SL/TP factors
+(`1.0`, `1.3`).
+
+**Not fixed here.** Training reproduces all three as the same constants on
+purpose: a feature that varies in training but is frozen at serve time is a
+train/serve skew, and the model would learn to lean on information it never
+receives. Fixing the three upstream bugs would make the features live again and
+would require a retrain, and each one changes signal generation — a trading
+decision, not a bug fix.
+
+Pinned by `tests/test_entry_feature_parity.py::TestConstantFeatures`.
+
+---
+
+## 14. A failed model load poisoned the inference cache until restart — FIXED
+
+**Location:** `analysis/models/xgboost_v2_inference.py::load_v2_model`
+
+```python
+_model = xgb.Booster()      # global assigned first
+_model.load_model(MODEL_PATH)   # ...and this is what raises
+```
+
+**What happened:** on any load failure — truncated file, partial write, a read
+racing a replacement — the function correctly returned `None`, but the global
+was already holding an empty `Booster`. Every later call took the
+`if _model is not None` fast path and returned that empty object, whose
+`num_features()` raises. The gate then reported
+
+```
+ML_GATE_INVALID — model feature count could not be determined
+```
+
+for the rest of the process: a *transient* file problem became permanent, the
+error blamed the feature contract rather than the load, and the process never
+recovered even after a good model was put in place. Only a restart cleared it.
+
+**Fix:** load into a local and publish to the cache only on success.
+
+Tests: `tests/test_entry_model_loader.py` (8 tests, including recovery after a
+failed load without a restart).
