@@ -1,72 +1,76 @@
 @echo off
-REM Trading Bot V3 - train_historical.bat
-REM Quick launcher for historical data training
+REM ============================================================================
+REM Kairos - entry model training
+REM
+REM This menu used to drive train_from_historical.py, which could not run: it
+REM imported a module that does not exist in the repository, so every option
+REM died at import. Training now lives in scripts/, split into a fetch step
+REM (needs MT5, so Windows only) and a train step.
+REM ============================================================================
 
 setlocal enabledelayedexpansion
+cd /d "%~dp0"
 
 echo.
 echo ========================================
-echo Historical Data Training Pipeline
+echo   Kairos - Entry Model Training
 echo ========================================
 echo.
 
-REM Check if Python is available
 python --version >nul 2>&1
 if errorlevel 1 (
-    echo ERROR: Python not found. Please install Python 3.8+
+    echo ERROR: Python not found on PATH.
     pause
     exit /b 1
 )
 
-REM Show menu
 echo Select an option:
 echo.
-echo 1. Fetch data only (save CSV files)
-echo 2. Build dataset only (process existing CSV)
-echo 3. Train model only (use existing database)
-echo 4. Full pipeline (fetch + build + train) - DEFAULT
-echo 5. Show database statistics
-echo 6. Fetch 2 years of data (longer history)
-echo 7. Custom symbols only
+echo   1. Fetch historical candles from MT5   (needs MT5 running + logged in)
+echo   2. Validate only - build dataset, walk-forward, no model written
+echo   3. Train and install the model         (backs up the current one first)
+echo   4. Full run - fetch, then train and install
 echo.
 
-set /p choice="Enter your choice (1-7, or press Enter for 4): "
-
+set /p choice="Enter your choice (1-4, or press Enter for 4): "
 if "%choice%"=="" set choice=4
 
 if "%choice%"=="1" (
-    echo Running: Fetch only...
-    python train_from_historical.py --fetch-only
+    python scripts\fetch_training_candles.py
 ) else if "%choice%"=="2" (
-    echo Running: Build dataset...
-    python train_from_historical.py --train-only --fetch-only
+    python scripts\train_entry_model.py --dry-run
 ) else if "%choice%"=="3" (
-    echo Running: Train model...
-    python train_from_historical.py --train-only
+    python scripts\train_entry_model.py
 ) else if "%choice%"=="4" (
-    echo Running: Full pipeline...
-    python train_from_historical.py
-) else if "%choice%"=="5" (
-    echo Running: Database stats...
-    python train_from_historical.py --stats
-) else if "%choice%"=="6" (
-    echo Running: Fetch 2 years...
-    python train_from_historical.py --days 730
-) else if "%choice%"=="7" (
-    set /p symbols="Enter symbols separated by space (e.g. EURUSD XAUUSD): "
-    python train_from_historical.py --symbols !symbols!
+    python scripts\fetch_training_candles.py
+    if errorlevel 1 (
+        echo.
+        echo Fetch failed - not training on stale or missing candles.
+        pause
+        exit /b 1
+    )
+    python scripts\train_entry_model.py
 ) else (
     echo Invalid choice
     pause
     exit /b 1
 )
 
+set RESULT=%errorlevel%
+
 echo.
-echo ========================================
-echo Process completed!
-echo.
-echo Training data location: data/historical/
-echo Training samples location: data/training/
-echo Model location: models/
-echo.
+if %RESULT% neq 0 (
+    echo ========================================
+    echo   FAILED - see the messages above.
+    echo   The live model was NOT replaced.
+    echo ========================================
+) else (
+    echo ========================================
+    echo   Done.
+    echo   Candles: data\historical\
+    echo   Model:   models\entry\entry_model.json
+    echo   Report:  models\entry\training_report.json
+    echo ========================================
+)
 pause
+exit /b %RESULT%

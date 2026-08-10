@@ -6,31 +6,21 @@ import os
 from datetime import datetime, timezone
 from utils.logger import get_logger
 from analysis.models import entry_feature_contract as contract
- 
+from analysis.models.entry_feature_spec import (
+    FEATURE_NAMES as LIVE_FEATURE_NAMES,
+    build_feature_vector,
+    session_now,
+)
+
 logger = get_logger("xgboost_v2")
- 
+
 _model = None
 MODEL_PATH = "models/entry/entry_model.json"
 
-# The feature vector this path actually builds, in order. Named explicitly so
-# the contract check can report *which* feature mismatched rather than only a
-# count, and so a future model carrying feature_names can be compared by name.
-LIVE_FEATURE_NAMES = (
-    "rsi",
-    "atr",
-    "macd",
-    "trend_strength",
-    "trend_score",
-    "momentum_score",
-    "volatility_score",
-    "market_regime",
-    "session",
-    "direction",
-)
-
-_REGIME_ENC = {"RANGING": 0, "TRENDING": 1, "ranging": 0, "trending": 1}
-_SESSION_ENC = {"asia": 0, "london": 1, "new_york": 2, "Asia": 0, "London": 1, "NY": 2}
-_DIRECTION_ENC = {"SELL": 0, "BUY": 1}
+# The feature order, encodings and missing-value policy live in
+# analysis/models/entry_feature_spec.py, which the training pipeline imports
+# too. Keeping a second copy here is what let training and serving drift apart
+# in the first place, so this module now only re-exports the name.
 
 
 def _as_dict(result) -> dict:
@@ -57,27 +47,40 @@ def load_v2_model():
         logger.warning(f"XGBoost v2 model not found at {MODEL_PATH}")
         return None
 
+    # Load into a local and publish to the cache only on success.
+    #
+    # This used to assign `_model = xgb.Booster()` and *then* call load_model()
+    # on it. When load_model raised — a truncated file, a partially-written
+    # model, a read racing a replacement — the global was already holding an
+    # empty Booster. The call correctly returned None, but every later call hit
+    # the `if _model is not None` fast path and handed back that empty Booster,
+    # whose num_features() raises. The gate then reported
+    # "ML_GATE_INVALID: model feature count could not be determined" forever,
+    # pointing at the feature contract instead of the real cause, and the
+    # process never recovered even once the file on disk was fixed.
     try:
-        _model = xgb.Booster()
-        _model.load_model(MODEL_PATH)
-        logger.info(f"[VERIFY] XGBOOST MODEL LOADED path={MODEL_PATH} available=True")
-        logger.info("XGBoost v2 model loaded successfully")
-        return _model
+        booster = xgb.Booster()
+        booster.load_model(MODEL_PATH)
     except Exception as e:
         logger.info(f"[VERIFY] XGBOOST MODEL LOADED path={MODEL_PATH} available=False")
         logger.error(f"Failed to load XGBoost v2 model: {e}")
         return None
 
+    _model = booster
+    logger.info(f"[VERIFY] XGBOOST MODEL LOADED path={MODEL_PATH} available=True")
+    logger.info("XGBoost v2 model loaded successfully")
+    return _model
+
  
  
 def get_session_now() -> str:
-    """تحديد الجلسة الحالية حسب الساعة UTC"""
-    h = datetime.now(timezone.utc).hour
-    if 0 <= h < 7:
-        return "asia"
-    if 7 <= h < 13:
-        return "london"
-    return "new_york"
+    """تحديد الجلسة الحالية حسب الساعة UTC.
+
+    Kept as a thin alias: the session boundaries themselves now live in
+    entry_feature_spec so the training pipeline derives a historical bar's
+    session with the identical rule.
+    """
+    return session_now()
  
  
 def predict_with_v2(
@@ -96,19 +99,19 @@ def predict_with_v2(
     if model is None:
         return _as_dict(contract.model_missing(f"model not loadable from {MODEL_PATH}"))
 
-    session = get_session_now()
-    features = [
-        float(rsi or 0),
-        float(atr or 0),
-        float(macd or 0),
-        float(trend_strength or 0),
-        float(trend_score or 50),
-        float(momentum_score or 50),
-        float(volatility_score or 50),
-        float(_REGIME_ENC.get(market_regime, 0)),
-        float(_SESSION_ENC.get(session, 0)),
-        float(_DIRECTION_ENC.get(direction, 0)),
-    ]
+    # Built through the shared spec so training and serving cannot diverge.
+    features = build_feature_vector(
+        rsi=rsi,
+        atr=atr,
+        macd=macd,
+        trend_strength=trend_strength,
+        trend_score=trend_score,
+        momentum_score=momentum_score,
+        volatility_score=volatility_score,
+        market_regime=market_regime,
+        session=session_now(),
+        direction=direction,
+    )
 
     # ------------------------------------------------------------------
     # Hard contract check BEFORE predicting.

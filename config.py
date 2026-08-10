@@ -211,6 +211,46 @@ MARKET_REGIME_ENABLED = True
 REGIME_ADX_THRESHOLD = 25
 REGIME_LOW_ADX_THRESHOLD = 20
 
+# ==============================
+# Signal feature calibration
+# ==============================
+# These three blocks exist because the corresponding features were frozen
+# constants in production (KNOWN_ISSUES #13). Every threshold here is read by
+# BOTH the live path and the training pipeline, so the two cannot disagree.
+#
+# --- Sideways band (fixes market_regime) ---
+# `ma_trend` used to return "sideways" only when `price == ma20` exactly, a
+# float equality that never occurs, so the H4 trend direction was never
+# "neutral" and the regime was always TRENDING. Price is now treated as flat
+# when it sits within this multiple of ATR of MA20 — an ATR-relative band, so
+# it means the same thing on EURUSD as on XAUUSD.
+MA_TREND_FLAT_ATR_MULT = 0.25
+
+# --- Volatility buckets (fixes volatility_score) ---
+# `get_volatility_score_from_snapshot` reads a "volatility" key that no code
+# path emitted, so every lookup fell through to the neutral default of 55.
+#
+# The measure is current ATR against the *median ATR of the same symbol over the
+# indicator window*: "is this symbol more volatile than it usually is".
+# An absolute ATR% threshold cannot work here — measured on live data, EURUSD H4
+# runs at ~0.14% of price while XAUUSD runs at ~0.96%, so any fixed cut pins each
+# symbol to one bucket forever, which is the same frozen-feature bug in a new
+# place. A self-relative ratio is scale-free and comparable across instruments.
+VOLATILITY_RATIO_VERY_HIGH = 1.50   # >= 1.5x its own typical ATR
+VOLATILITY_RATIO_HIGH = 1.20
+VOLATILITY_RATIO_LOW = 0.80         # <  0.8x
+
+# --- Trend strength encoding (fixes trend_strength) ---
+# MultiTimeframeData.strength is a string ("weak"/"moderate"/"strong"). main.py
+# guarded it with isinstance(..., (int, float)), which never passed, so the
+# model always received 0.0. These are the numeric values the string maps to.
+TREND_STRENGTH_VALUES = {
+    "weak": 25.0,
+    "moderate": 60.0,
+    "strong": 100.0,
+}
+TREND_STRENGTH_DEFAULT = 0.0  # unknown/absent — distinct from a real "weak"
+
 
 
 # ==============================

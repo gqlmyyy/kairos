@@ -142,6 +142,60 @@ class TestPrerequisitesAreChecked:
         assert verify < launch, "the connection check runs after the bot starts"
 
 
+class TestNoUnescapedPercentSigns:
+    """A literal `%` in a .bat file starts a variable reference to cmd.exe.
+
+    ``python -c "... print('...%s...' % (...)) ..."`` looked like ordinary
+    Python string formatting, but cmd.exe strips `%s balance=%s` (or
+    anything between two bare `%`s that isn't a real environment variable)
+    before Python ever sees the line — the interpreter then received a
+    mangled, often syntactically invalid one-liner. Depending on exactly how
+    cmd.exe folded the string this either raised a confusing error inside the
+    "MT5 connection failed" branch or, in some invocation contexts, closed
+    without a readable message — reported as "the script just closes."
+
+    Every batch variable reference has a recognizable shape: `%VAR%`,
+    `%~dp0`-style modifiers, `%0`-`%9`/`%*` positional parameters, or an
+    escaped `%%`. Anything left over after stripping those is an unescaped
+    percent sign — usually printf-style Python formatting that leaked into a
+    .bat file.
+    """
+
+    _VALID_PERCENT_FORMS = re.compile(
+        r"%%"                       # escaped literal percent
+        r"|%~[a-zA-Z0-9]*\d"        # %~dp0, %~nx1, etc.
+        r"|%[A-Za-z_][A-Za-z0-9_]*%"  # %VAR%
+        r"|%[0-9*]"                 # %0-%9, %*
+    )
+
+    def test_no_bare_percent_signs_survive_batch_variable_stripping(self, startup_code):
+        offenders = []
+        for line in startup_code.splitlines():
+            stripped = self._VALID_PERCENT_FORMS.sub("", line)
+            if "%" in stripped:
+                offenders.append(line)
+        assert not offenders, (
+            "unescaped '%' in startup.bat — cmd.exe will silently mangle "
+            "these before any embedded command (e.g. `python -c \"...\"`) "
+            "runs:\n  " + "\n  ".join(offenders)
+        )
+
+    def test_the_checker_flags_the_original_defect(self):
+        """Sanity check: the regex above must actually catch the bug it
+        exists for, not just report a clean file by accident."""
+        broken_line = (
+            "python -c \"print('Connected: login=%s balance=%s' "
+            "% (acc.login, acc.balance))\""
+        )
+        stripped = self._VALID_PERCENT_FORMS.sub("", broken_line)
+        assert "%" in stripped
+
+    def test_the_checker_does_not_flag_real_batch_variables(self):
+        clean_line = 'echo %CD% %MT5_TRIES% %errorlevel% %~dp0 %1 %%literal%%'
+        stripped = self._VALID_PERCENT_FORMS.sub("", clean_line)
+        assert "%" not in stripped
+
+
 class TestEnvExampleMatchesConfig:
     """A copied .env.example must name every variable config.py reads."""
 

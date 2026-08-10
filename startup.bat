@@ -97,7 +97,7 @@ REM ==============================
 REM [3/4] Connection check
 REM ==============================
 echo [3/4] Verifying the MT5 connection...
-python -c "from data.market.mt5_session import ensure_session, get_account_info; import sys; ok = ensure_session(); acc = get_account_info() if ok else None; print('Connected: login=%s balance=%s' % (acc.login, acc.balance)) if acc else print('Connection failed'); sys.exit(0 if acc else 1)"
+python -c "from data.market.mt5_session import ensure_session, get_account_info; import sys; ok = ensure_session(); acc = get_account_info() if ok else None; print(f'Connected: login={acc.login} balance={acc.balance}') if acc else print('Connection failed'); sys.exit(0 if acc else 1)"
 if errorlevel 1 (
     echo.
     echo ERROR: could not establish an MT5 session.
