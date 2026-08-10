@@ -26,12 +26,7 @@ import time
 from typing import Dict, Optional
 
 from utils.logger import get_logger
-from config import (
-    MA_TREND_FLAT_ATR_MULT,
-    VOLATILITY_RATIO_HIGH,
-    VOLATILITY_RATIO_LOW,
-    VOLATILITY_RATIO_VERY_HIGH,
-)
+from analysis.features import live_parity_features as lpf
 
 from .mt5_session import ensure_session, ensure_symbol, get_account_info, mt5_call
 
@@ -188,32 +183,6 @@ def get_candles(symbol: str, timeframe: str = "4H", count: int = 100) -> list:
         return cached if cached is not None else []
 
 
-def _atr_ratio(highs, lows, closes, atr_now: float) -> float:
-    """Current ATR over this symbol's median ATR across the candle window.
-
-    Scale-free, so "volatile" means the same thing on EURUSD as on XAUUSD.
-    Returns 1.0 (neutral) when there is not enough history to judge.
-    """
-    trs = []
-    for i in range(1, len(closes)):
-        trs.append(max(
-            highs[i] - lows[i],
-            abs(highs[i] - closes[i - 1]),
-            abs(lows[i] - closes[i - 1]),
-        ))
-    if len(trs) < 28:
-        return 1.0
-    window_atrs = [
-        sum(trs[j - 14:j]) / 14
-        for j in range(14, len(trs) + 1)
-    ]
-    window_atrs.sort()
-    mid = len(window_atrs) // 2
-    median = (window_atrs[mid] if len(window_atrs) % 2
-              else (window_atrs[mid - 1] + window_atrs[mid]) / 2)
-    return (atr_now / median) if median > 0 else 1.0
-
-
 def get_indicators(symbol: str, timeframe: str = "4H") -> dict:
     """Compute RSI/ATR/MACD/MA-trend from MT5 candles.
 
@@ -238,75 +207,25 @@ def get_indicators(symbol: str, timeframe: str = "4H") -> dict:
         highs = [float(c.get("high", 0)) for c in candles]
         lows = [float(c.get("low", 0)) for c in candles]
 
-        # RSI(14) - simple average over the last 14 differences.
-        # NOT Wilder smoothing: preserved deliberately, see module docstring.
-        gains, losses = [], []
-        for i in range(1, 15):
-            diff = closes[-i] - closes[-i - 1]
-            (gains if diff > 0 else losses).append(abs(diff))
-        avg_gain = sum(gains) / 14 if gains else 0.001
-        avg_loss = sum(losses) / 14 if losses else 0.001
-        rs = avg_gain / avg_loss
-        rsi = 100 - (100 / (1 + rs))
-
-        # ATR(14) over the last 14 bars.
-        trs = []
-        for i in range(1, 15):
-            tr = max(
-                highs[-i] - lows[-i],
-                abs(highs[-i] - closes[-i - 1]),
-                abs(lows[-i] - closes[-i - 1]),
-            )
-            trs.append(tr)
-        atr = sum(trs) / 14 if trs else FALLBACK_ATR.get(symbol, 0.001)
-
-        # MACD(12,26) using simple moving averages, not EMAs.
-        # Preserved deliberately, see module docstring.
-        ema12 = sum(closes[-12:]) / 12
-        ema26 = sum(closes[-26:]) / 26
-        macd = ema12 - ema26
-
-        # MA trend classification.
-        ma20 = sum(closes[-20:]) / 20
-        ma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else closes[-1]
-        price = closes[-1]
-
-        # "sideways" used to require price == ma20 exactly — a float equality
-        # that never happens — so this function never returned it, the H4 trend
-        # direction was never "neutral", and market_regime was permanently
-        # TRENDING (KNOWN_ISSUES #13). Price within a fraction of ATR of MA20 is
-        # now treated as flat. ATR-relative so the band means the same thing on
-        # EURUSD (~0.0016) as on XAUUSD (~40).
-        flat_band = atr * MA_TREND_FLAT_ATR_MULT
-        if abs(price - ma20) <= flat_band:
-            ma_trend = "sideways"
-        elif price > ma20 > ma50:
-            ma_trend = "strong uptrend"
-        elif price > ma20:
-            ma_trend = "uptrend"
-        elif price < ma20 < ma50:
-            ma_trend = "strong downtrend"
-        elif price < ma20:
-            ma_trend = "downtrend"
-        else:
-            ma_trend = "sideways"
-
-        # Volatility bucket. get_volatility_score_from_snapshot has always read
-        # a "volatility" key, but nothing ever wrote one, so every lookup missed
-        # and the score was frozen at the neutral 55.
+        # ------------------------------------------------------------------
+        # These come from analysis.features.live_parity_features, which the
+        # training pipeline also calls. There used to be a second copy of each
+        # formula here; two copies of the same arithmetic is precisely how
+        # training and serving drift apart, and it is what the 65-vs-10 model
+        # mismatch grew out of. One implementation, imported by both.
         #
-        # Measured against this symbol's own recent ATR rather than an absolute
-        # percentage: EURUSD sits near 0.14% of price and XAUUSD near 0.96%, so a
-        # fixed cut would pin each symbol to a single bucket permanently.
-        atr_ratio = _atr_ratio(highs, lows, closes, atr)
-        if atr_ratio >= VOLATILITY_RATIO_VERY_HIGH:
-            volatility = "very high"
-        elif atr_ratio >= VOLATILITY_RATIO_HIGH:
-            volatility = "high"
-        elif atr_ratio < VOLATILITY_RATIO_LOW:
-            volatility = "low"
-        else:
-            volatility = "normal"
+        # The formulas are deliberately the unusual ones this project has always
+        # used (simple-average RSI, SMA-based MACD) — see the module docstring.
+        # ------------------------------------------------------------------
+        rsi = lpf.live_rsi(closes)
+        atr = lpf.live_atr(highs, lows, closes)
+        macd = lpf.live_macd(closes)
+        ma_trend = lpf.live_ma_trend(closes, atr)
+
+        atr_ratio = lpf.live_atr_ratio(highs, lows, closes, atr)
+        volatility = lpf.live_volatility_bucket(atr_ratio)
+
+        price = closes[-1]
 
         return {
             "rsi": round(rsi, 2),

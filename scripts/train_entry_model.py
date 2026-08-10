@@ -454,6 +454,36 @@ def validate_dataset(X, y, meta) -> Dict[str, Any]:
 # Walk-forward
 # ---------------------------------------------------------------------------
 
+def _auc_with_ties(yt, p, n_pos: int, n_neg: int) -> float:
+    """Mann-Whitney ROC-AUC using *average* ranks for tied scores.
+
+    The previous version used ``argsort().argsort()``, which assigns ordinal
+    ranks and breaks ties by array position. Positives were concatenated first,
+    so tied positives systematically received the lower ranks and the AUC came
+    out wrong whenever scores repeated. A constant predictor — every score
+    identical — scored 0.0 instead of the 0.5 it is by definition, which is why
+    the `train_prior_constant` baseline reported roc_auc 0.0174.
+
+    Tree ensembles emit a limited set of leaf values, so ties are routine here,
+    not a corner case.
+    """
+    import numpy as np
+
+    order = np.argsort(p, kind="mergesort")
+    sorted_p = p[order]
+    ranks = np.empty(len(p), dtype=float)
+
+    i = 0
+    while i < len(sorted_p):
+        j = i
+        while j + 1 < len(sorted_p) and sorted_p[j + 1] == sorted_p[i]:
+            j += 1
+        ranks[order[i:j + 1]] = (i + j) / 2.0 + 1.0   # average rank of the tie group
+        i = j + 1
+
+    return float((ranks[yt == 1.0].sum() - n_pos * (n_pos + 1) / 2.0) / (n_pos * n_neg))
+
+
 def _metrics(y_true, p) -> Dict[str, Any]:
     """Full classification metrics. Accuracy alone is not a success criterion:
     with a ~34% win rate, always predicting "loss" scores 66%."""
@@ -472,24 +502,26 @@ def _metrics(y_true, p) -> Dict[str, Any]:
     recall = tp / (tp + fn) if (tp + fn) else 0.0
     f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
 
-    pos, neg = p[yt == 1.0], p[yt == 0.0]
-    roc_auc = None
-    if len(pos) and len(neg):
-        allp = np.concatenate([pos, neg])
-        ranks = allp.argsort().argsort().astype(float) + 1
-        roc_auc = float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2)
-                        / (len(pos) * len(neg)))
+    n_pos = int((yt == 1.0).sum())
+    n_neg = int((yt == 0.0).sum())
 
-    # PR-AUC by step-wise interpolation over descending score order.
+    roc_auc = None
+    if n_pos and n_neg:
+        roc_auc = _auc_with_ties(yt, p, n_pos, n_neg)
+
+    # PR-AUC. Ties are grouped so the curve does not depend on the arbitrary
+    # order argsort happens to produce among equal scores.
     pr_auc = None
-    if len(pos):
-        order = np.argsort(-p)
-        ys = yt[order]
-        tps = np.cumsum(ys)
-        fps = np.cumsum(1 - ys)
+    if n_pos:
+        order = np.argsort(-p, kind="mergesort")
+        ps, ys = p[order], yt[order]
+        # One step per distinct score, not per row.
+        boundaries = np.r_[np.flatnonzero(np.diff(ps)) , len(ps) - 1]
+        tps = np.cumsum(ys)[boundaries]
+        fps = np.cumsum(1 - ys)[boundaries]
         prec = tps / np.maximum(tps + fps, 1e-12)
-        rec = tps / max(ys.sum(), 1e-12)
-        pr_auc = float(np.sum(np.diff(np.concatenate([[0.0], rec])) * prec))
+        rec = tps / n_pos
+        pr_auc = float(np.sum(np.diff(np.r_[0.0, rec]) * prec))
 
     # Calibration: mean predicted vs actual, in probability deciles.
     calib = []
@@ -501,8 +533,15 @@ def _metrics(y_true, p) -> Dict[str, Any]:
                           "actual": round(float(yt[m].mean()), 4)})
 
     base_rate = float(yt.mean())
+    brier = float(((p - yt) ** 2).mean())
+    # Reference: predicting the base rate for everyone. A model that cannot beat
+    # this is not adding probabilistic information.
+    brier_baseline = float(((base_rate - yt) ** 2).mean())
     return {
         "n": int(len(yt)),
+        "brier": round(brier, 6),
+        "brier_baseline": round(brier_baseline, 6),
+        "brier_skill_score": round(1 - brier / max(brier_baseline, 1e-12), 4),
         "accuracy": round(float((pred == yt).mean()), 4),
         "majority_baseline": round(max(base_rate, 1 - base_rate), 4),
         "precision": round(precision, 4),

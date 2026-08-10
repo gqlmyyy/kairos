@@ -47,8 +47,25 @@ def live_rsi(closes: Sequence[float]) -> float:
     for i in range(1, 15):
         diff = closes[-i] - closes[-i - 1]
         (gains if diff > 0 else losses).append(abs(diff))
-    avg_gain = sum(gains) / 14 if gains else 0.001
-    avg_loss = sum(losses) / 14 if losses else 0.001
+
+    # The epsilon guard must trigger on a zero *average*, not an empty list.
+    #
+    # `diff > 0` sends everything else — including an exact 0.0 — to `losses`,
+    # so a flat stretch of 14 bars fills `losses` with fourteen zeros. The list
+    # is non-empty, the `if losses` guard passes, and avg_loss is 0.0: a
+    # ZeroDivisionError. Flat H1 stretches are ordinary in real data (weekends,
+    # holidays, thin sessions), and the original guard could never catch them.
+    #
+    # In live this raised inside get_indicators' try/except and silently
+    # returned FALLBACK_INDICATORS — which is where the rsi=50.0 / atr=0.001
+    # constants polluting the recorded dataset came from (KNOWN_ISSUES #3).
+    #
+    # Applying the same 0.001 epsilon the original author intended, to both
+    # averages, makes a flat window score RSI 50 (rs = 1), an all-up window ~100
+    # and an all-down window ~0. Inputs that did not previously raise are
+    # unaffected, so the feature distribution does not shift.
+    avg_gain = (sum(gains) / 14) or 0.001
+    avg_loss = (sum(losses) / 14) or 0.001
     rs = avg_gain / avg_loss
     return 100 - (100 / (1 + rs))
 

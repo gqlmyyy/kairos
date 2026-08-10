@@ -75,23 +75,33 @@ class TestIndicatorFormulas:
         result = mt5_client.get_indicators("EURUSD", "H1")
         assert result["atr"] == pytest.approx(2.0, abs=1e-6)
 
-    def test_perfectly_flat_series_falls_back(self, monkeypatch):
-        """Documents an inherited defect, deliberately preserved.
+    def test_perfectly_flat_series_is_computed_not_faked(self, monkeypatch):
+        """Regression: this used to raise and fall back to fixed constants.
 
-        With every close identical, all 14 differences are zero, so they all go
-        to `losses`, `avg_loss` becomes 0.0, and `rs = avg_gain / avg_loss`
-        raises ZeroDivisionError. The except clause catches it and returns the
-        fallback constants.
+        With every close identical, all 14 differences are zero. Because
+        `diff > 0` routes an exact 0.0 to `losses`, the list was non-empty but
+        summed to zero, the `if losses` guard missed it, and
+        `rs = avg_gain / avg_loss` raised ZeroDivisionError. The except clause
+        swallowed it and returned FALLBACK_INDICATORS — which is where the
+        rsi=50.0 / atr=0.001 constants polluting the recorded dataset came from
+        (KNOWN_ISSUES #3).
 
-        This is the original QuantDinger-era formula, kept byte-for-byte so the
-        entry model's input distribution does not shift. It matters in practice
-        on illiquid symbols or frozen feeds — exactly the stale-data condition
-        seen in production. Tracked in KNOWN_ISSUES.md.
+        Flat stretches are ordinary in real data: weekends, holidays, thin
+        sessions, frozen feeds. The epsilon now applies to a zero *average*
+        rather than an empty list, so the window is scored honestly: RSI 50
+        (price did not move) and a real ATR from the actual high/low range.
         """
         closes = [100.0] * 60
         self._patch_candles(monkeypatch, make_candles(closes, [101.0] * 60, [99.0] * 60))
         result = mt5_client.get_indicators("EURUSD", "H1")
-        assert result == mt5_client.FALLBACK_INDICATORS["EURUSD"]
+
+        assert result != mt5_client.FALLBACK_INDICATORS["EURUSD"], (
+            "a flat window still degrades to fallback constants"
+        )
+        assert result["rsi"] == pytest.approx(50.0), "no movement should read neutral"
+        assert result["atr"] == pytest.approx(2.0), "ATR must come from the real range"
+        assert result["close"] == 100.0
+        assert result["ma_trend"] == "sideways"
 
     @pytest.mark.parametrize(
         "closes,expected",
