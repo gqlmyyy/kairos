@@ -18,62 +18,54 @@ The ten features, in wire order
 0    rsi                  float      H1 snapshot `rsi` (mt5_client.get_indicators)
 1    atr                  float      H4 `atr` via get_atr(symbol) — default "4H"
 2    macd                 float      H1 snapshot `macd`
-3    trend_strength       float      *see WARNING 1 — always 0.0 in live*
+3    trend_strength       float      MTF strength string -> TREND_STRENGTH_ENCODING
 4    trend_score          float      H4 ma_trend/RSI bucket: {40,65,70,75,85}
 5    momentum_score       float      H1 RSI bucket: {40,65,85}
-6    volatility_score     float      *see WARNING 2 — always 55.0 in live*
+6    volatility_score     float      H1 volatility bucket: {20,35,55,80}
 7    market_regime        float      encoded, see REGIME_ENCODING
 8    session              float      encoded from UTC hour, see SESSION_ENCODING
 9    direction            float      SELL=0.0, BUY=1.0
 ===  ===================  =========  =========================================
 
-WARNING 1 — `trend_strength` is a constant in production
---------------------------------------------------------
-`main.py` passes ``mtf.strength if isinstance(mtf.strength, (int, float)) else 0.0``.
-``MultiTimeframeData.strength`` is a *string* ("strong"/"moderate"/"weak"), set in
-`analysis/multi_timeframe/analyzer_snapshot.py`, so the isinstance check never
-passes and the model always receives **0.0**. Verified empirically.
+Three features were frozen constants — now fixed
+------------------------------------------------
+All three were verified empirically before and after. They are recorded here
+because the fixes changed live signal generation, and because a reader needs to
+know why the calibration constants in ``config.py`` exist.
 
-WARNING 2 — `volatility_score` is a constant in production
------------------------------------------------------------
-`get_volatility_score_from_snapshot` reads ``data.get("volatility", "")``, but
-`mt5_client.get_indicators` returns only rsi/atr/macd/ma_trend/close — there is no
-`volatility` key on any code path. Every lookup misses and falls through to the
-final ``else``, so the model always receives **55.0**. Verified empirically.
+**1. trend_strength** — was always ``0.0``. ``main.py`` passed
+``mtf.strength if isinstance(mtf.strength, (int, float)) else 0.0``, but
+``MultiTimeframeData.strength`` is a *string* ("weak"/"moderate"/"strong"), so
+the guard never passed. Now encoded by :func:`encode_trend_strength` from
+``config.TREND_STRENGTH_VALUES``. An unrecognised value maps to
+``TREND_STRENGTH_DEFAULT`` (0.0), kept distinct from a genuine "weak" (25.0) so
+"not measured" and "measured, weak" never collide.
 
-WARNING 3 — `market_regime` is a constant in production
---------------------------------------------------------
-`get_market_regime_from_snapshot` returns TRENDING whenever the H4 trend
-direction is not "neutral". That direction comes from `ma_trend`, and
-`mt5_client.get_indicators` only emits "sideways" — the sole path to "neutral" —
-when ``price == ma20`` *exactly*, a float equality that does not occur (0 hits in
-200,000 random draws). The HIGH_VOLATILITY / LOW_VOLATILITY branches are also
-unreachable because they test `volatility_score`, which WARNING 2 freezes at 55.
+**2. volatility_score** — was always ``55.0``. ``get_volatility_score_from_snapshot``
+reads a ``volatility`` key that no code path emitted, so every lookup missed and
+fell through to the neutral default. ``mt5_client.get_indicators`` now derives it
+from ATR relative to price — the volatility measure the pipeline already
+computes — bucketed by ``config.VOLATILITY_PCT_*``.
 
-So the encoded value is always 1.0 (TRENDING). Confirmed against production logs:
-every cycle, for all three symbols, logged ``regime=TRENDING``.
+**3. market_regime** — was always ``TRENDING``. ``ma_trend`` returned "sideways"
+only when ``price == ma20`` *exactly*, a float equality that does not occur, so
+the H4 trend direction was never "neutral". ``get_indicators`` now treats price
+within ``config.MA_TREND_FLAT_ATR_MULT`` ATRs of MA20 as flat, which makes
+RANGING reachable; with volatility_score live, HIGH_VOLATILITY and
+LOW_VOLATILITY become reachable too.
 
-Side effect beyond the model: Layer 6 can therefore only ever select the "trend"
-or "breakout" profile — "mean_reversion" and "range" are unreachable — and
-Layer 1 always applies the trending SL/TP factors.
+Training reproduces all three through the same code (`live_parity_features`
+mirrors `get_indicators`, and both call this module's encoders), so there is one
+calibration, not two.
 
-All three are left as-is deliberately. Training replicates them as the same
-constants, because a feature that varies in training but is frozen at serve time
-is a train/serve skew — the model would learn to lean on information it never
-actually receives. Fixing the upstream bugs would make these features live again
-and would require retraining; each is a signal-generation change, tracked
-separately in KNOWN_ISSUES.md.
-
-Consequence: the model has ten input slots but only **seven** carry information —
-rsi, atr, macd, trend_score, momentum_score, session, direction.
-`tests/test_entry_feature_parity.py::TestConstantFeatures` pins this so it is a
-recorded fact rather than a silent surprise.
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Sequence
+
+import config as _cfg
 
 # ---------------------------------------------------------------------------
 # The contract
@@ -124,6 +116,14 @@ SESSION_DEFAULT = 0
 DIRECTION_ENCODING: Dict[str, int] = {"SELL": 0, "BUY": 1}
 DIRECTION_DEFAULT = 0
 
+# `MultiTimeframeData.strength` is a string. main.py used to guard it with
+# isinstance(..., (int, float)), which never passed, so the model always got
+# 0.0. Values come from config so live and training share one calibration.
+TREND_STRENGTH_ENCODING: Dict[str, float] = {
+    k: float(v) for k, v in _cfg.TREND_STRENGTH_VALUES.items()
+}
+TREND_STRENGTH_DEFAULT = float(_cfg.TREND_STRENGTH_DEFAULT)
+
 # Defaults applied when a value is None/absent. These mirror the `or` fallbacks
 # in the original predict_with_v2 exactly.
 MISSING_DEFAULTS: Dict[str, float] = {
@@ -136,12 +136,11 @@ MISSING_DEFAULTS: Dict[str, float] = {
     "volatility_score": 50.0,
 }
 
-# The three features that are frozen in production (see module docstring).
-LIVE_CONSTANT_FEATURES: Dict[str, float] = {
-    "trend_strength": 0.0,
-    "volatility_score": 55.0,
-    "market_regime": 1.0,  # TRENDING
-}
+# Previously frozen in production, now live (see module docstring). Kept as an
+# explicit empty mapping rather than deleted: the training pipeline checks it to
+# decide which constant features are *expected*, and a regression that re-freezes
+# one of these must surface as an unexpected constant, not be waved through.
+LIVE_CONSTANT_FEATURES: Dict[str, float] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +157,26 @@ def encode_session(session: Any) -> float:
 
 def encode_direction(direction: Any) -> float:
     return float(DIRECTION_ENCODING.get(direction, DIRECTION_DEFAULT))
+
+
+def encode_trend_strength(strength: Any) -> float:
+    """Map MTF alignment strength to a number.
+
+    Accepts the string the analyser actually produces ("weak"/"moderate"/
+    "strong"), and passes a real number straight through so a future numeric
+    source needs no change here. Anything unrecognised becomes
+    TREND_STRENGTH_DEFAULT, which is deliberately distinct from the value for
+    a genuine "weak" — "we could not measure it" and "we measured it and it is
+    weak" must not collide.
+    """
+    if isinstance(strength, bool):
+        return TREND_STRENGTH_DEFAULT
+    if isinstance(strength, (int, float)):
+        return float(strength)
+    if strength is None:
+        return TREND_STRENGTH_DEFAULT
+    return TREND_STRENGTH_ENCODING.get(str(strength).strip().lower(),
+                                       TREND_STRENGTH_DEFAULT)
 
 
 def session_from_hour(hour_utc: int) -> str:
@@ -234,7 +253,7 @@ def build_feature_vector(
         _num(rsi, MISSING_DEFAULTS["rsi"]),
         _num(atr, MISSING_DEFAULTS["atr"]),
         _num(macd, MISSING_DEFAULTS["macd"]),
-        _num(trend_strength, MISSING_DEFAULTS["trend_strength"]),
+        encode_trend_strength(trend_strength),
         _num(trend_score, MISSING_DEFAULTS["trend_score"]),
         _num(momentum_score, MISSING_DEFAULTS["momentum_score"]),
         _num(volatility_score, MISSING_DEFAULTS["volatility_score"]),

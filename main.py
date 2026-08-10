@@ -48,6 +48,7 @@ from risk.position_sizing import calculate_position_size
 from risk.risk_governor import get_risk_governor
 from risk.trade_gate import TradeRequest, validate_trade_request
 from execution.order_validation import validate_market_data
+from analysis.models.entry_feature_spec import encode_trend_strength
 from trade_management import TradeManagementOrchestrator
 from data.market.candle_boundary import get_last_completed_candle_time
 from config import TF_DECISION
@@ -615,7 +616,10 @@ def run_cycle():
             entry_profile, tm_settings = TradeManagementOrchestrator.resolve_profile(
                 regime=regime_name,
                 mtf_aligned=mtf.aligned,
-                trend_strength=mtf.strength if isinstance(mtf.strength, (int, float)) else None,
+                # Same string-vs-number bug as the model path: Layer 6 compares
+                # trend_strength against TRAILING_TREND_HIGH, so passing None meant
+                # that branch never fired. Encode it through the shared spec.
+                trend_strength=encode_trend_strength(mtf.strength),
             )
 
             # ATR and equity feed every downstream number: the stop distance,
@@ -668,7 +672,10 @@ def run_cycle():
                     rsi=rsi,
                     atr=atr,
                     macd=macd,
-                    trend_strength=mtf.strength if isinstance(mtf.strength, (int, float)) else 0.0,
+                    # Pass the raw strength through: it is a string, and the
+                    # feature spec encodes it. The isinstance guard that used to
+                    # be here never passed, so the model always received 0.0.
+                    trend_strength=mtf.strength,
                     trend_score=trend_score,
                     momentum_score=momentum[0] if isinstance(momentum, tuple) else momentum,
                     volatility_score=volatility_score,
@@ -680,7 +687,10 @@ def run_cycle():
                     rsi=rsi,
                     atr=atr,
                     macd=macd,
-                    trend_strength=mtf.strength if isinstance(mtf.strength, (int, float)) else 0.0,
+                    # Pass the raw strength through: it is a string, and the
+                    # feature spec encodes it. The isinstance guard that used to
+                    # be here never passed, so the model always received 0.0.
+                    trend_strength=mtf.strength,
                     trend_score=trend_score,
                     momentum_score=momentum[0] if isinstance(momentum, tuple) else momentum,
                     volatility_score=volatility_score,

@@ -8,65 +8,57 @@ Planned follow-up work lives in `ROADMAP.md`.
 
 ---
 
-## 0. THE ENTRY MODEL CURRENTLY GATES SHUT ON EVERY SIGNAL — the bot cannot open a trade
+## 0. THE ENTRY MODEL STILL GATES SHUT — the bot cannot open a trade
 
 **Severity: blocks all trading. Read this before anything else in this file.**
 
-**Verified empirically** (2026-08-08, remediation branch), by calling the real
-production function directly:
+`models/entry/entry_model.json` expects **65** features; the live path sends
+**10**. `risk/trade_gate.py` treats `ml_available=False` as an unconditional
+REJECT, so every signal, on every symbol, every cycle, is refused:
 
 ```
-$ python3 -c "
-from analysis.models.xgboost_v2_inference import predict_with_v2
-print(predict_with_v2(rsi=55.0, atr=0.0012, macd=0.0, trend_strength=50.0,
-    trend_score=50.0, momentum_score=50.0, volatility_score=50.0,
-    market_regime='trending', direction='BUY'))
-"
-[ML_GATE] ML_GATE_INVALID — entry BLOCKED. reason=feature count mismatch: model expects 65, got 10
-{'p_win': None, 'available': False, 'status': 'ML_GATE_INVALID', 'reason': '...'}
+[ML_GATE] ML_GATE_INVALID — feature count mismatch: model expects 65, got 10
+[TRADE_GATE] REJECT — ...
 ```
 
-Every call, for every symbol, every cycle, returns `ML_GATE_INVALID`. In
-`risk/trade_gate.py`, `ml_available=False` is an unconditional REJECT. **No
-signal can currently pass the ML gate, so no trade can currently open**, via
-either entry path:
+This is the C-01 contract check working as designed — before it existed, the
+same mismatch was *unchecked* and `booster.predict()` silently zero-filled the
+55 absent slots, returning a probability unrelated to the trade (BUY and SELL
+scored identically). Blocking is correct; it is not the cure.
 
-- `ENTRY_MODEL_VERSION=v1` (the default): `predict_with_v2()` in
-  `analysis/models/xgboost_v2_inference.py` sends the 10 legacy scalar
-  features (`LIVE_FEATURE_NAMES`), but `models/entry/entry_model.json` on disk
-  expects 65 (`booster.num_features() == 65`).
-- `ENTRY_MODEL_VERSION=v2`: `predict_with_entry_v2()` in
-  `analysis/entry_v2/inference.py` sends the *same* 10 legacy scalars — its own
-  docstring calls this "a placeholder until feature_schema v2 is implemented" —
-  even though `analysis/entry_v2/feature_schema.py::FEATURE_COLUMNS` defines
-  the full 65-feature schema the model file was almost certainly trained on
-  (65 matches exactly). **No live code path currently builds that 65-feature
-  vector from live market data — the schema exists, the model exists, nothing
-  connects them at inference time.**
+**What has been built to fix it** (the model itself is deliberately unchanged):
 
-**Why this is not a regression from this remediation.** Before C-01, this same
-mismatch existed and was *not* checked — `predict_with_v2` fed 10 values into a
-65-feature model and returned a prediction anyway (`booster.predict()` silently
-zero-fills missing feature slots). C-01 added the contract check
-(`analysis/models/entry_feature_contract.py`) specifically to stop that: an
-unverified prediction from a mismatched model must not size a live trade. The
-gate is doing exactly its job. What C-01 does not do, and was never scoped to
-do, is fix the mismatch itself — that requires either retraining
-`entry_model.json` on the 10-feature legacy vector, or finishing the entry_v2
-feature-engineering pipeline so it actually produces the 65 features live and
-switching `ENTRY_MODEL_VERSION` to `v2`. Both are real modeling work, not a
-remediation-scope code fix, and touch entry-signal generation — explicitly
-out of scope for this remediation without separate sign-off.
+- `analysis/models/entry_feature_spec.py` — the single source of truth for the
+  ten features: names, order, encodings, defaults. Live inference imports its
+  vector builder from here, so a second divergent list cannot exist.
+- `analysis/features/live_parity_features.py` — recomputes indicators with the
+  *live* arithmetic so a training row and a live call agree value-for-value.
+- `scripts/fetch_training_candles.py` — captures real OHLC from MT5 (Windows).
+- `scripts/train_entry_model.py` — labels both BUY and SELL, picks the horizon
+  from the measured resolution curve, validates the dataset, runs walk-forward
+  validation, compares against baselines, and refuses to install a model that
+  fails any check. It also **refuses to run at all** on candles without a fetch
+  manifest, so a synthetic-data model cannot reach production by accident.
 
-**Before resuming live trading on this branch**, resolve one of:
-1. Retrain `models/entry/entry_model.json` on the current 10-feature
-   `LIVE_FEATURE_NAMES` vector (fast; matches what's actually available today), or
-2. Finish `analysis/entry_v2/inference.py`'s feature builder to emit the real
-   65 features from `feature_schema.FEATURE_COLUMNS` using live market data,
-   and switch `ENTRY_MODEL_VERSION=v2`.
+**The remaining blocker is data, not code.** Training needs real OHLC for
+EURUSD/GBPUSD/XAUUSD across H4 and H1. The existing
+`data/entry_v2/labeled_dataset.parquet` was evaluated and **rejected**: it has
+no `direction` column, so all 24,851 rows were labelled BUY — a model trained on
+it could not distinguish BUY from SELL, reproducing the exact defect being
+fixed. Its indicators also use standard Wilder/EMA formulas while live uses
+simple-average RSI and SMA-based MACD (measured skew: RSI 6.6 points mean,
+MACD 3.5x scale).
 
-Until then, running the bot is safe (nothing opens on a bad prediction) but
-non-functional (nothing opens at all).
+**To finish, on the Windows machine with MT5 running:**
+
+```
+python scripts/fetch_training_candles.py
+python scripts/train_entry_model.py --dry-run    # validate only
+python scripts/train_entry_model.py              # train and install
+```
+
+The trainer backs up the current model first and installs only after the
+feature-contract, walk-forward and live-inference checks all pass.
 
 ---
 
@@ -399,37 +391,40 @@ per-symbol, rather than a single pip count shared across instrument classes.
 
 ---
 
-## 13. Three of the entry model's ten features are constants in production
+## 13. Three of the entry model's ten features were constants — FIXED
 
 Found while rebuilding the entry-model training pipeline. Each was verified by
-calling the live functions directly, not by reading the code.
+calling the live functions directly, before and after.
 
-| Feature | Value in live | Cause |
-|---|---|---|
-| `trend_strength` | always `0.0` | `main.py` passes `mtf.strength if isinstance(mtf.strength, (int, float)) else 0.0`, but `MultiTimeframeData.strength` is a *string* (`"strong"`/`"moderate"`/`"weak"`), so the guard never passes |
-| `volatility_score` | always `55.0` | `get_volatility_score_from_snapshot` reads `data.get("volatility", "")`, but `mt5_client.get_indicators` returns only rsi/atr/macd/ma_trend/close — the key does not exist on any path, so every lookup falls to the final `else` |
-| `market_regime` | always `TRENDING` (`1.0`) | `ma_trend` only returns `"sideways"` when `price == ma20` *exactly* (0 hits in 200,000 random draws), so the H4 trend direction is never `"neutral"`; the HIGH/LOW_VOLATILITY branches are unreachable because they test `volatility_score`, frozen at 55 by the row above |
+| Feature | Was | Cause | Fix |
+|---|---|---|---|
+| `trend_strength` | always `0.0` | `main.py` passed `mtf.strength if isinstance(mtf.strength, (int, float)) else 0.0`, but `MultiTimeframeData.strength` is a *string* (`"weak"`/`"moderate"`/`"strong"`), so the guard never passed | `entry_feature_spec.encode_trend_strength` maps the string via `config.TREND_STRENGTH_VALUES` (25/60/100). Unknown maps to `0.0`, kept distinct from a genuine "weak" |
+| `volatility_score` | always `55.0` | `get_volatility_score_from_snapshot` reads a `volatility` key that `get_indicators` never emitted, so every lookup fell to the final `else` | `get_indicators` now emits it, bucketed from **current ATR / this symbol's median ATR over the window** |
+| `market_regime` | always `TRENDING` (`1.0`) | `ma_trend` returned `"sideways"` only when `price == ma20` *exactly* (0 hits in 200,000 draws), so the H4 trend direction was never `"neutral"` | price within `config.MA_TREND_FLAT_ATR_MULT` (0.25) ATRs of MA20 is now flat, making RANGING reachable; with volatility live, HIGH/LOW_VOLATILITY are reachable too |
 
-The third is confirmed independently by production logs: every cycle, for all
-three symbols, logged `regime=TRENDING`.
+**Why the volatility measure is self-relative, not an ATR percentage.** The first
+attempt bucketed `atr / price` against fixed cuts. Measured on live data, EURUSD
+H4 runs at ~0.14% of price and XAUUSD at ~0.96% — an order of magnitude apart —
+so any fixed cut pins each symbol to one bucket permanently, which is the same
+frozen-feature bug in a new place. The dataset validator caught it (reported
+`volatility_score` as an unexpected constant) before it reached a model. The
+measure is now `ATR_now / median(ATR over the 100-candle window)`, which is
+scale-free; verified to give the same bucket for identical relative volatility
+at prices 1.10, 1.27 and 4330.
 
-**Consequence for the model:** it has ten input slots but only **seven** carry
-information — `rsi`, `atr`, `macd`, `trend_score`, `momentum_score`, `session`,
-`direction`.
+**Side effects of the regime fix, beyond the model:** Layer 6 can now select the
+`mean_reversion` and `range` profiles, and Layer 1 no longer applies the trending
+SL/TP factors unconditionally. Layer 6's `classify_entry` also received the same
+string-vs-number fix — it compares `trend_strength` against `TRAILING_TREND_HIGH`
+and was being passed `None`, so that branch never fired.
 
-**Consequence beyond the model:** because the regime is always TRENDING, Layer 6
-can only ever select the `trend` or `breakout` profile — `mean_reversion` and
-`range` are unreachable — and Layer 1 always applies the trending SL/TP factors
-(`1.0`, `1.3`).
+Training reproduces all three through the same code
+(`analysis/features/live_parity_features.py` mirrors `get_indicators`, and both
+sides call the spec's encoders), so there is one calibration rather than two.
+The two `_atr_ratio` implementations are asserted equal to within 1e-12.
 
-**Not fixed here.** Training reproduces all three as the same constants on
-purpose: a feature that varies in training but is frozen at serve time is a
-train/serve skew, and the model would learn to lean on information it never
-receives. Fixing the three upstream bugs would make the features live again and
-would require a retrain, and each one changes signal generation — a trading
-decision, not a bug fix.
-
-Pinned by `tests/test_entry_feature_parity.py::TestConstantFeatures`.
+Pinned by `tests/test_entry_feature_parity.py::TestPreviouslyConstantFeaturesAreNowDynamic`
+(20 tests).
 
 ---
 

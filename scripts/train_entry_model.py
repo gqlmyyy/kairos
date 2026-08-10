@@ -253,9 +253,15 @@ def build_dataset(
                 continue
 
             trend_score, trend_dir = lpf.trend_score_from_indicators(h4_ind)
-            momentum_score, _ = lpf.momentum_score_from_indicators(h1_ind)
-            vol = lpf.volatility_score_live()
+            momentum_score, mom_dir = lpf.momentum_score_from_indicators(h1_ind)
+            # volatility_score comes from H1, matching the live snapshot's
+            # TF_DECISION lookup.
+            vol = lpf.volatility_score_from_indicators(h1_ind)
             regime = lpf.regime_from_scores(trend_dir, vol)
+            # The live analyser derives strength from H4/H1/M15 alignment. M15
+            # is not fetched for training, so H1 stands in for it — recorded
+            # here rather than hidden, and the encoding is the shared one.
+            strength = lpf.mtf_strength_from_directions(trend_dir, mom_dir, mom_dir)
             session = spec.session_from_timestamp(bar_close_t)
             atr = float(h4_ind["atr"])
 
@@ -268,7 +274,7 @@ def build_dataset(
                     rsi=h1_ind["rsi"],
                     atr=atr,
                     macd=h1_ind["macd"],
-                    trend_strength=lpf.trend_strength_live(),
+                    trend_strength=strength,
                     trend_score=trend_score,
                     momentum_score=momentum_score,
                     volatility_score=vol,
@@ -280,9 +286,38 @@ def build_dataset(
                 meta.append({
                     "symbol": symbol, "t": bar_close_t, "direction": direction,
                     "reason": outcome["reason"], "bars": outcome["bars"],
+                    "regime": regime, "session": session,
                 })
 
     return X, y, meta
+
+
+# ---------------------------------------------------------------------------
+# Provenance
+# ---------------------------------------------------------------------------
+
+def check_provenance(directory: str) -> Dict[str, Any]:
+    """Refuse to train a production model on anything but real broker candles.
+
+    A model is only as trustworthy as the data under it, and synthetic candles
+    exercise the code path without saying anything about market behaviour. The
+    fetch script writes a manifest; its absence means the candles came from
+    somewhere else.
+    """
+    manifest_path = os.path.join(directory, "manifest.json")
+    if not os.path.exists(manifest_path):
+        return {
+            "real": False,
+            "reason": (
+                f"no manifest.json in {directory}. Only "
+                "scripts/fetch_training_candles.py writes one, and it only runs "
+                "against a live MT5 terminal. Candles of unknown origin will not "
+                "be used to train a production model."
+            ),
+        }
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    return {"real": True, "manifest": manifest}
 
 
 # ---------------------------------------------------------------------------
@@ -372,6 +407,26 @@ def validate_dataset(X, y, meta) -> Dict[str, Any]:
             suspicious.append({"feature": name, "separation_sigma": round(sep, 2)})
     report["leakage_suspects"] = suspicious
 
+    # Direct leakage probe: no feature may be an near-perfect classifier on its
+    # own. If one is, an outcome-derived value has reached the feature vector.
+    single_feature_auc = {}
+    for idx, name in enumerate(spec.FEATURE_NAMES):
+        col = [row[idx] for row in X]
+        if len(set(col)) == 1:
+            continue
+        pairs = sorted(zip(col, y))
+        pos = sum(1 for _, v in pairs if v == 1.0)
+        neg = len(pairs) - pos
+        if not pos or not neg:
+            continue
+        rank_sum = sum(i + 1 for i, (_, v) in enumerate(pairs) if v == 1.0)
+        auc = (rank_sum - pos * (pos + 1) / 2) / (pos * neg)
+        single_feature_auc[name] = round(max(auc, 1 - auc), 4)
+    report["single_feature_auc"] = single_feature_auc
+    report["leaky_features"] = [
+        n for n, a in single_feature_auc.items() if a >= 0.90
+    ]
+
     by_dir = defaultdict(lambda: [0, 0])
     for row_y, m in zip(y, meta):
         by_dir[m["direction"]][0] += 1
@@ -399,6 +454,90 @@ def validate_dataset(X, y, meta) -> Dict[str, Any]:
 # Walk-forward
 # ---------------------------------------------------------------------------
 
+def _metrics(y_true, p) -> Dict[str, Any]:
+    """Full classification metrics. Accuracy alone is not a success criterion:
+    with a ~34% win rate, always predicting "loss" scores 66%."""
+    import numpy as np
+
+    yt = np.asarray(y_true, dtype=float)
+    p = np.asarray(p, dtype=float).ravel()
+    pred = (p >= 0.5).astype(float)
+
+    tp = float(((pred == 1) & (yt == 1)).sum())
+    tn = float(((pred == 0) & (yt == 0)).sum())
+    fp = float(((pred == 1) & (yt == 0)).sum())
+    fn = float(((pred == 0) & (yt == 1)).sum())
+
+    precision = tp / (tp + fp) if (tp + fp) else 0.0
+    recall = tp / (tp + fn) if (tp + fn) else 0.0
+    f1 = 2 * precision * recall / (precision + recall) if (precision + recall) else 0.0
+
+    pos, neg = p[yt == 1.0], p[yt == 0.0]
+    roc_auc = None
+    if len(pos) and len(neg):
+        allp = np.concatenate([pos, neg])
+        ranks = allp.argsort().argsort().astype(float) + 1
+        roc_auc = float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2)
+                        / (len(pos) * len(neg)))
+
+    # PR-AUC by step-wise interpolation over descending score order.
+    pr_auc = None
+    if len(pos):
+        order = np.argsort(-p)
+        ys = yt[order]
+        tps = np.cumsum(ys)
+        fps = np.cumsum(1 - ys)
+        prec = tps / np.maximum(tps + fps, 1e-12)
+        rec = tps / max(ys.sum(), 1e-12)
+        pr_auc = float(np.sum(np.diff(np.concatenate([[0.0], rec])) * prec))
+
+    # Calibration: mean predicted vs actual, in probability deciles.
+    calib = []
+    for lo in np.arange(0.0, 1.0, 0.1):
+        m = (p >= lo) & (p < lo + 0.1)
+        if m.sum() >= 10:
+            calib.append({"bin": round(float(lo), 1), "n": int(m.sum()),
+                          "mean_pred": round(float(p[m].mean()), 4),
+                          "actual": round(float(yt[m].mean()), 4)})
+
+    base_rate = float(yt.mean())
+    return {
+        "n": int(len(yt)),
+        "accuracy": round(float((pred == yt).mean()), 4),
+        "majority_baseline": round(max(base_rate, 1 - base_rate), 4),
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
+        "roc_auc": round(roc_auc, 4) if roc_auc is not None else None,
+        "pr_auc": round(pr_auc, 4) if pr_auc is not None else None,
+        "pr_auc_baseline": round(base_rate, 4),
+        "confusion_matrix": {"tp": int(tp), "fp": int(fp), "tn": int(tn), "fn": int(fn)},
+        "base_win_rate": round(base_rate, 4),
+        "calibration": calib,
+    }
+
+
+def _baselines(y_train, y_test, X_test, meta_test) -> Dict[str, Any]:
+    """Simple comparators the model must beat to be worth deploying."""
+    import numpy as np
+
+    yt = np.asarray(y_test, dtype=float)
+    prior = float(np.asarray(y_train, dtype=float).mean())
+
+    out = {
+        "always_loss": {"accuracy": round(float((yt == 0).mean()), 4)},
+        "always_win": {"accuracy": round(float((yt == 1).mean()), 4)},
+        "train_prior_constant": _metrics(yt, np.full(len(yt), prior)),
+    }
+
+    # A trend-following heuristic using only trend_score, no learning.
+    idx = spec.FEATURE_NAMES.index("trend_score")
+    ts = np.asarray([row[idx] for row in X_test], dtype=float)
+    spread = float(ts.max() - ts.min())  # np.ndarray.ptp() was removed in NumPy 2
+    out["trend_score_heuristic"] = _metrics(yt, (ts - ts.min()) / max(spread, 1e-12))
+    return out
+
+
 def walk_forward(X, y, meta, folds: int = 5) -> Dict[str, Any]:
     """Expanding-window validation in chronological order.
 
@@ -412,6 +551,7 @@ def walk_forward(X, y, meta, folds: int = 5) -> Dict[str, Any]:
     order = sorted(range(len(X)), key=lambda i: meta[i]["t"])
     Xo = [X[i] for i in order]
     yo = [y[i] for i in order]
+    mo = [meta[i] for i in order]
 
     n = len(Xo)
     fold_size = n // (folds + 1)
@@ -419,11 +559,12 @@ def walk_forward(X, y, meta, folds: int = 5) -> Dict[str, Any]:
         return {"skipped": f"not enough rows for {folds} folds (n={n})"}
 
     results = []
+    baselines_all = []
     for k in range(1, folds + 1):
         tr_end = fold_size * k
         te_end = min(fold_size * (k + 1), n)
         X_tr, y_tr = Xo[:tr_end], yo[:tr_end]
-        X_te, y_te = Xo[tr_end:te_end], yo[tr_end:te_end]
+        X_te, y_te, m_te = Xo[tr_end:te_end], yo[tr_end:te_end], mo[tr_end:te_end]
         if len(set(y_tr)) < 2 or len(set(y_te)) < 2:
             continue
 
@@ -433,45 +574,49 @@ def walk_forward(X, y, meta, folds: int = 5) -> Dict[str, Any]:
 
         booster = xgb.train(_params(), dtr, num_boost_round=200, verbose_eval=False)
         p = np.asarray(booster.predict(dte)).ravel()
-        yt = np.asarray(y_te, dtype=float)
 
-        pred = (p >= 0.5).astype(float)
-        acc = float((pred == yt).mean())
-        base = float(max(yt.mean(), 1 - yt.mean()))
+        fold = {"fold": k, "train": len(X_tr), "test": len(X_te)}
+        fold["overall"] = _metrics(y_te, p)
 
-        # AUC without sklearn (rank statistic).
-        pos = p[yt == 1.0]
-        neg = p[yt == 0.0]
-        auc = None
-        if len(pos) and len(neg):
-            allp = np.concatenate([pos, neg])
-            ranks = allp.argsort().argsort().astype(float) + 1
-            auc = float((ranks[: len(pos)].sum() - len(pos) * (len(pos) + 1) / 2)
-                        / (len(pos) * len(neg)))
+        # Slices: per symbol, per direction, per regime.
+        for slice_name, key in (("per_symbol", "symbol"),
+                                ("per_direction", "direction"),
+                                ("per_regime", "regime")):
+            buckets: Dict[str, List[int]] = defaultdict(list)
+            for i, m in enumerate(m_te):
+                buckets[str(m.get(key))].append(i)
+            fold[slice_name] = {
+                kk: _metrics([y_te[i] for i in idxs], p[idxs])
+                for kk, idxs in buckets.items()
+                if len(idxs) >= 30 and len(set(y_te[i] for i in idxs)) > 1
+            }
 
-        selective = None
-        mask = p >= 0.60  # the live entry threshold
-        if mask.sum() >= 20:
-            selective = {"n": int(mask.sum()), "win_rate": round(float(yt[mask].mean()), 4)}
+        # Behaviour at the live entry threshold.
+        mask = p >= 0.60
+        fold["at_threshold_0.60"] = (
+            {"n": int(mask.sum()),
+             "win_rate": round(float(np.asarray(y_te)[mask].mean()), 4),
+             "base_win_rate": round(float(np.asarray(y_te).mean()), 4)}
+            if mask.sum() >= 20 else None
+        )
 
-        results.append({
-            "fold": k, "train": len(X_tr), "test": len(X_te),
-            "accuracy": round(acc, 4), "majority_baseline": round(base, 4),
-            "lift_over_baseline": round(acc - base, 4),
-            "auc": round(auc, 4) if auc is not None else None,
-            "at_threshold_0.60": selective,
-            "test_win_rate": round(float(yt.mean()), 4),
-        })
+        baselines_all.append(_baselines(y_tr, y_te, X_te, m_te))
+        results.append(fold)
 
     if not results:
         return {"skipped": "no usable folds"}
 
-    aucs = [r["auc"] for r in results if r["auc"] is not None]
+    aucs = [r["overall"]["roc_auc"] for r in results if r["overall"]["roc_auc"] is not None]
+    praucs = [r["overall"]["pr_auc"] for r in results if r["overall"]["pr_auc"] is not None]
     return {
         "folds": results,
-        "mean_auc": round(statistics.mean(aucs), 4) if aucs else None,
-        "mean_accuracy": round(statistics.mean(r["accuracy"] for r in results), 4),
-        "mean_lift": round(statistics.mean(r["lift_over_baseline"] for r in results), 4),
+        "baselines_per_fold": baselines_all,
+        "mean_roc_auc": round(statistics.mean(aucs), 4) if aucs else None,
+        "mean_pr_auc": round(statistics.mean(praucs), 4) if praucs else None,
+        "mean_accuracy": round(statistics.mean(r["overall"]["accuracy"] for r in results), 4),
+        "mean_majority_baseline": round(
+            statistics.mean(r["overall"]["majority_baseline"] for r in results), 4),
+        "mean_f1": round(statistics.mean(r["overall"]["f1"] for r in results), 4),
     }
 
 
@@ -555,11 +700,24 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true",
                         help="run everything but do not touch the live model file")
     parser.add_argument("--min-auc", type=float, default=0.52,
-                        help="refuse to install a model below this walk-forward AUC")
+                        help="refuse to install a model below this walk-forward ROC-AUC")
+    parser.add_argument("--allow-synthetic", action="store_true",
+                        help="run on candles without a fetch manifest. Exercises the "
+                             "code path only; the model is never installed.")
     args = parser.parse_args()
 
     from config import SYMBOLS
     symbols = args.symbols or list(SYMBOLS)
+
+    provenance = check_provenance(args.candles)
+    if not provenance["real"]:
+        if not args.allow_synthetic:
+            print("REFUSING TO TRAIN: " + provenance["reason"])
+            print("\nPass --allow-synthetic ONLY to exercise the code path; a "
+                  "model trained that way must never be installed.")
+            return 1
+        print("WARNING: unverified candle source; --allow-synthetic given.")
+        print("         The model will NOT be installed.")
 
     print("Loading candles...")
     candles_by_symbol: Dict[str, Dict[str, List]] = {}
@@ -620,8 +778,8 @@ def main() -> int:
     if wf.get("skipped"):
         print(f"\nABORT: walk-forward skipped ({wf['skipped']})")
         return 1
-    if wf.get("mean_auc") is not None and wf["mean_auc"] < args.min_auc:
-        print(f"\nABORT: mean walk-forward AUC {wf['mean_auc']} < {args.min_auc}. "
+    if wf.get("mean_roc_auc") is not None and wf["mean_roc_auc"] < args.min_auc:
+        print(f"\nABORT: mean walk-forward ROC-AUC {wf['mean_roc_auc']} < {args.min_auc}. "
               "The model has no demonstrated edge; refusing to install it.")
         return 1
 
@@ -667,6 +825,15 @@ def main() -> int:
         "walk_forward": wf,
         "model_checks": checks,
     }
+
+    if args.allow_synthetic and not provenance["real"]:
+        os.remove(staged)
+        print("\nSYNTHETIC RUN — pipeline verified, live model untouched.")
+        print(json.dumps({"walk_forward_summary": {
+            k: wf.get(k) for k in ("mean_roc_auc", "mean_pr_auc", "mean_accuracy",
+                                   "mean_majority_baseline", "mean_f1")},
+            "checks": checks}, indent=2))
+        return 0
 
     if args.dry_run:
         os.remove(staged)

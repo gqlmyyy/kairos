@@ -23,9 +23,15 @@ the migration must match field for field.
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Optional
+from typing import Dict, Optional
 
 from utils.logger import get_logger
+from config import (
+    MA_TREND_FLAT_ATR_MULT,
+    VOLATILITY_RATIO_HIGH,
+    VOLATILITY_RATIO_LOW,
+    VOLATILITY_RATIO_VERY_HIGH,
+)
 
 from .mt5_session import ensure_session, ensure_symbol, get_account_info, mt5_call
 
@@ -56,10 +62,10 @@ FALLBACK_ATR = {
 }
 
 FALLBACK_INDICATORS = {
-    "EURUSD": {"rsi": 50.0, "atr": 0.0008, "macd": 0.0, "ma_trend": "sideways", "close": 1.0800},
-    "GBPUSD": {"rsi": 50.0, "atr": 0.0010, "macd": 0.0, "ma_trend": "sideways", "close": 1.2700},
-    "XAUUSD": {"rsi": 50.0, "atr": 8.0, "macd": 0.0, "ma_trend": "sideways", "close": 2350.0},
-    "USDJPY": {"rsi": 50.0, "atr": 0.15, "macd": 0.0, "ma_trend": "sideways", "close": 150.0},
+    "EURUSD": {"rsi": 50.0, "atr": 0.0008, "macd": 0.0, "ma_trend": "sideways", "volatility": "normal", "atr_ratio": 1.0, "close": 1.0800},
+    "GBPUSD": {"rsi": 50.0, "atr": 0.0010, "macd": 0.0, "ma_trend": "sideways", "volatility": "normal", "atr_ratio": 1.0, "close": 1.2700},
+    "XAUUSD": {"rsi": 50.0, "atr": 8.0, "macd": 0.0, "ma_trend": "sideways", "volatility": "normal", "atr_ratio": 1.0, "close": 2350.0},
+    "USDJPY": {"rsi": 50.0, "atr": 0.15, "macd": 0.0, "ma_trend": "sideways", "volatility": "normal", "atr_ratio": 1.0, "close": 150.0},
 }
 
 # Candle cache. TTL matches the previous client (5 minutes) so request volume
@@ -182,6 +188,32 @@ def get_candles(symbol: str, timeframe: str = "4H", count: int = 100) -> list:
         return cached if cached is not None else []
 
 
+def _atr_ratio(highs, lows, closes, atr_now: float) -> float:
+    """Current ATR over this symbol's median ATR across the candle window.
+
+    Scale-free, so "volatile" means the same thing on EURUSD as on XAUUSD.
+    Returns 1.0 (neutral) when there is not enough history to judge.
+    """
+    trs = []
+    for i in range(1, len(closes)):
+        trs.append(max(
+            highs[i] - lows[i],
+            abs(highs[i] - closes[i - 1]),
+            abs(lows[i] - closes[i - 1]),
+        ))
+    if len(trs) < 28:
+        return 1.0
+    window_atrs = [
+        sum(trs[j - 14:j]) / 14
+        for j in range(14, len(trs) + 1)
+    ]
+    window_atrs.sort()
+    mid = len(window_atrs) // 2
+    median = (window_atrs[mid] if len(window_atrs) % 2
+              else (window_atrs[mid - 1] + window_atrs[mid]) / 2)
+    return (atr_now / median) if median > 0 else 1.0
+
+
 def get_indicators(symbol: str, timeframe: str = "4H") -> dict:
     """Compute RSI/ATR/MACD/MA-trend from MT5 candles.
 
@@ -192,7 +224,8 @@ def get_indicators(symbol: str, timeframe: str = "4H") -> dict:
 
     if not candles or len(candles) < 20:
         fallback = FALLBACK_INDICATORS.get(symbol, {
-            "rsi": 50.0, "atr": 0.001, "macd": 0.0, "ma_trend": "sideways", "close": 0.0
+            "rsi": 50.0, "atr": 0.001, "macd": 0.0, "ma_trend": "sideways",
+            "volatility": "normal", "atr_ratio": 1.0, "close": 0.0
         })
         logger.warning(
             "[MT5_DATA] using FALLBACK indicators for %s %s (candles=%d)",
@@ -238,7 +271,16 @@ def get_indicators(symbol: str, timeframe: str = "4H") -> dict:
         ma50 = sum(closes[-50:]) / 50 if len(closes) >= 50 else closes[-1]
         price = closes[-1]
 
-        if price > ma20 > ma50:
+        # "sideways" used to require price == ma20 exactly — a float equality
+        # that never happens — so this function never returned it, the H4 trend
+        # direction was never "neutral", and market_regime was permanently
+        # TRENDING (KNOWN_ISSUES #13). Price within a fraction of ATR of MA20 is
+        # now treated as flat. ATR-relative so the band means the same thing on
+        # EURUSD (~0.0016) as on XAUUSD (~40).
+        flat_band = atr * MA_TREND_FLAT_ATR_MULT
+        if abs(price - ma20) <= flat_band:
+            ma_trend = "sideways"
+        elif price > ma20 > ma50:
             ma_trend = "strong uptrend"
         elif price > ma20:
             ma_trend = "uptrend"
@@ -249,18 +291,38 @@ def get_indicators(symbol: str, timeframe: str = "4H") -> dict:
         else:
             ma_trend = "sideways"
 
+        # Volatility bucket. get_volatility_score_from_snapshot has always read
+        # a "volatility" key, but nothing ever wrote one, so every lookup missed
+        # and the score was frozen at the neutral 55.
+        #
+        # Measured against this symbol's own recent ATR rather than an absolute
+        # percentage: EURUSD sits near 0.14% of price and XAUUSD near 0.96%, so a
+        # fixed cut would pin each symbol to a single bucket permanently.
+        atr_ratio = _atr_ratio(highs, lows, closes, atr)
+        if atr_ratio >= VOLATILITY_RATIO_VERY_HIGH:
+            volatility = "very high"
+        elif atr_ratio >= VOLATILITY_RATIO_HIGH:
+            volatility = "high"
+        elif atr_ratio < VOLATILITY_RATIO_LOW:
+            volatility = "low"
+        else:
+            volatility = "normal"
+
         return {
             "rsi": round(rsi, 2),
             "atr": round(atr, 6),
             "macd": round(macd, 6),
             "ma_trend": ma_trend,
+            "volatility": volatility,
+            "atr_ratio": round(atr_ratio, 4),
             "close": price,
         }
 
     except Exception as exc:
         logger.error("[MT5_DATA] indicator computation failed for %s: %s", symbol, exc)
         return FALLBACK_INDICATORS.get(symbol, {
-            "rsi": 50.0, "atr": 0.001, "macd": 0.0, "ma_trend": "sideways", "close": 0.0
+            "rsi": 50.0, "atr": 0.001, "macd": 0.0, "ma_trend": "sideways",
+            "volatility": "normal", "atr_ratio": 1.0, "close": 0.0
         }).copy()
 
 

@@ -172,7 +172,9 @@ class TestIndicatorParity:
 
     def test_indicator_dict_has_the_live_keys(self):
         out = lpf.live_indicators(_make_candles())
-        assert set(out.keys()) == {"rsi", "atr", "macd", "ma_trend", "close"}
+        assert set(out.keys()) == {
+            "rsi", "atr", "macd", "ma_trend", "volatility", "atr_ratio", "close",
+        }
 
     def test_too_few_candles_returns_none_rather_than_a_fallback_row(self):
         """Live substitutes a static fallback table here; such a row must never
@@ -181,11 +183,20 @@ class TestIndicatorParity:
 
     @pytest.mark.parametrize("seed", [1, 2, 3, 4, 5])
     def test_ma_trend_matches_live_classification(self, seed):
-        closes = [c["close"] for c in _make_candles(seed=seed)]
+        from config import MA_TREND_FLAT_ATR_MULT
+
+        candles = _make_candles(seed=seed)
+        closes = [c["close"] for c in candles]
+        highs = [c["high"] for c in candles]
+        lows = [c["low"] for c in candles]
+        atr = lpf.live_atr(highs, lows, closes)
+
         ma20 = sum(closes[-20:]) / 20
         ma50 = sum(closes[-50:]) / 50
         price = closes[-1]
-        if price > ma20 > ma50:
+        if abs(price - ma20) <= atr * MA_TREND_FLAT_ATR_MULT:
+            expected = "sideways"
+        elif price > ma20 > ma50:
             expected = "strong uptrend"
         elif price > ma20:
             expected = "uptrend"
@@ -195,7 +206,7 @@ class TestIndicatorParity:
             expected = "downtrend"
         else:
             expected = "sideways"
-        assert lpf.live_ma_trend(closes) == expected
+        assert lpf.live_ma_trend(closes, atr) == expected
 
 
 class TestScoreBucketParity:
@@ -239,101 +250,241 @@ class TestScoreBucketParity:
         assert lpf.momentum_score_from_indicators(data) == expected
         assert get_momentum_score_from_snapshot(snap, "X", timeframe=TF_DECISION) == expected
 
-    def test_regime_matches_live_given_the_production_volatility_score(self):
+    def test_regime_matches_live(self):
         from analysis.technical.regime import get_market_regime_from_snapshot
         from data.market.market_snapshot import MarketSnapshot
         from config import TF_TREND, TF_DECISION
 
-        for ma_trend, expected in [
-            ("strong uptrend", "TRENDING"),
-            ("strong downtrend", "TRENDING"),
-            ("sideways", "RANGING"),
+        for ma_trend, volatility, expected in [
+            ("strong uptrend", "normal", "TRENDING"),
+            ("strong downtrend", "normal", "TRENDING"),
+            ("sideways", "normal", "RANGING"),
+            ("sideways", "very high", "HIGH_VOLATILITY"),
+            ("sideways", "low", "LOW_VOLATILITY"),
         ]:
-            data = {"ma_trend": ma_trend, "rsi": 50, "atr": 0.001, "macd": 0.0, "close": 1.1}
+            data = {"ma_trend": ma_trend, "rsi": 50, "atr": 0.001, "macd": 0.0,
+                    "volatility": volatility, "close": 1.1}
             snap = MarketSnapshot(data={"X": {TF_TREND: data, TF_DECISION: data}})
 
             _, direction = lpf.trend_score_from_indicators(data)
-            mine = lpf.regime_from_scores(direction, lpf.volatility_score_live())
+            mine = lpf.regime_from_scores(
+                direction, lpf.volatility_score_from_indicators(data)
+            )
 
-            assert mine == expected
+            assert mine == expected, f"{ma_trend}/{volatility}: got {mine}"
             assert get_market_regime_from_snapshot(snap, "X") == expected
 
 
-class TestConstantFeatures:
-    """Two of the ten features are frozen in production. Pinned so the fact is
-    recorded, and so training keeps reproducing them as constants."""
+class TestPreviouslyConstantFeaturesAreNowDynamic:
+    """All three were frozen in production (KNOWN_ISSUES #13). These prove they
+    respond to real input now, and that the fix reaches both paths identically."""
 
-    def test_volatility_score_is_always_55_in_live(self):
-        from analysis.technical.indicators import get_volatility_score_from_snapshot
-        from data.market.market_snapshot import MarketSnapshot
-        from config import TF_DECISION
+    # --- trend_strength -------------------------------------------------
+    @pytest.mark.parametrize("strength,expected", [
+        ("weak", 25.0), ("moderate", 60.0), ("strong", 100.0),
+    ])
+    def test_trend_strength_encodes_each_level_distinctly(self, strength, expected):
+        assert spec.encode_trend_strength(strength) == expected
 
-        # get_indicators never emits a "volatility" key on any path.
-        for ma_trend in ("strong uptrend", "sideways", "strong downtrend"):
-            data = {"ma_trend": ma_trend, "rsi": 50, "atr": 0.05, "macd": 0.0, "close": 1.1}
-            snap = MarketSnapshot(data={"X": {TF_DECISION: data}})
-            assert get_volatility_score_from_snapshot(snap, "X") == 55
+    def test_trend_strength_levels_are_ordered_and_distinct(self):
+        w = spec.encode_trend_strength("weak")
+        m = spec.encode_trend_strength("moderate")
+        s = spec.encode_trend_strength("strong")
+        assert w < m < s, "strength levels must be ordered"
+        assert len({w, m, s}) == 3
 
-        assert lpf.volatility_score_live() == 55.0
+    @pytest.mark.parametrize("raw", ["STRONG", " Strong ", "Moderate"])
+    def test_trend_strength_is_case_and_whitespace_tolerant(self, raw):
+        assert spec.encode_trend_strength(raw) == spec.encode_trend_strength(
+            raw.strip().lower()
+        )
 
-    def test_trend_strength_is_always_zero_in_live(self):
-        """mtf.strength is a string, so main.py's isinstance check never passes."""
+    def test_unknown_strength_is_distinct_from_weak(self):
+        """"not measured" and "measured, weak" must not collide."""
+        assert spec.encode_trend_strength("bogus") == spec.TREND_STRENGTH_DEFAULT
+        assert spec.encode_trend_strength(None) == spec.TREND_STRENGTH_DEFAULT
+        assert spec.TREND_STRENGTH_DEFAULT != spec.encode_trend_strength("weak")
+
+    def test_numeric_strength_passes_through(self):
+        """A future numeric source needs no change here."""
+        assert spec.encode_trend_strength(42.5) == 42.5
+
+    def test_the_real_analyser_output_encodes_to_a_real_number(self):
+        """End to end against the actual MTF analyser, not a literal."""
         from analysis.multi_timeframe.analyzer_snapshot import (
             get_multi_timeframe_analysis_from_snapshot,
         )
         from data.market.market_snapshot import MarketSnapshot
         from config import TF_TREND, TF_DECISION, TF_TIMING
 
-        data = {"ma_trend": "strong uptrend", "rsi": 62, "atr": 0.001, "macd": 0.0, "close": 1.1}
-        snap = MarketSnapshot(data={"X": {TF_TREND: data, TF_DECISION: data, TF_TIMING: data}})
+        # All three timeframes agreeing bullish -> "strong".
+        bull = {"ma_trend": "strong uptrend", "rsi": 62, "atr": 0.001,
+                "macd": 0.0, "volatility": "normal", "close": 1.1}
+        snap = MarketSnapshot(data={"X": {TF_TREND: bull, TF_DECISION: bull, TF_TIMING: bull}})
         mtf = get_multi_timeframe_analysis_from_snapshot(snap, "X")
 
         assert isinstance(mtf.strength, str)
-        fed_to_model = mtf.strength if isinstance(mtf.strength, (int, float)) else 0.0
-        assert fed_to_model == 0.0
-        assert lpf.trend_strength_live() == 0.0
+        assert spec.encode_trend_strength(mtf.strength) > 0.0, (
+            "the real analyser output still encodes to the not-measured default"
+        )
 
-    def test_market_regime_is_always_trending_in_live(self):
-        """ma_trend can only be "sideways" when price == ma20 exactly, so the
-        H4 trend direction is never "neutral" and the regime never leaves
-        TRENDING. Confirmed against production logs."""
+    def test_main_py_no_longer_discards_the_strength_string(self):
+        """The isinstance guard that caused the bug must be gone."""
+        import os
+
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        with open(os.path.join(repo, "main.py"), encoding="utf-8-sig") as fh:
+            source = fh.read()
+
+        assert "mtf.strength if isinstance(mtf.strength, (int, float))" not in source, (
+            "main.py still guards a string with isinstance((int, float)), which "
+            "always falls through and feeds the model a constant"
+        )
+
+    # --- volatility_score -----------------------------------------------
+    @pytest.mark.parametrize("volatility,expected", [
+        ("very high", 20.0), ("high", 35.0), ("low", 80.0), ("normal", 55.0),
+    ])
+    def test_volatility_score_responds_to_the_bucket(self, volatility, expected):
+        from analysis.technical.indicators import get_volatility_score_from_snapshot
+        from data.market.market_snapshot import MarketSnapshot
+        from config import TF_DECISION
+
+        data = {"ma_trend": "uptrend", "rsi": 50, "atr": 0.001, "macd": 0.0,
+                "volatility": volatility, "close": 1.1}
+        snap = MarketSnapshot(data={"X": {TF_DECISION: data}})
+
+        assert get_volatility_score_from_snapshot(snap, "X") == expected
+        assert lpf.volatility_score_from_indicators(data) == expected
+
+    def test_volatility_score_is_not_constant_across_regimes(self):
+        """The actual defect: one value for every market condition."""
+        seen = set()
+        for ratio in (0.5, 1.0, 1.3, 2.0):
+            bucket = lpf.live_volatility_bucket(ratio)
+            seen.add(lpf.volatility_score_from_indicators({"volatility": bucket}))
+        assert len(seen) == 4, f"volatility_score barely moves: {sorted(seen)}"
+
+    def test_volatility_is_symbol_scale_free(self):
+        """An absolute ATR% cut pinned EURUSD (~0.14% of price) and XAUUSD
+        (~0.96%) to different permanent buckets. The ratio must not."""
+        import random
+
+        def series(price, vol_rel, n=100, seed=3):
+            rng = random.Random(seed)
+            closes = [price]
+            for _ in range(n):
+                closes.append(closes[-1] * (1 + rng.gauss(0, vol_rel)))
+            closes = closes[1:]
+            highs, lows = [], []
+            rng2 = random.Random(seed + 1)
+            for c in closes:
+                r = abs(rng2.gauss(0, vol_rel * c * 0.8))
+                highs.append(c + r)
+                lows.append(c - r)
+            return highs, lows, closes
+
+        # Same *relative* volatility, wildly different price scales.
+        buckets = set()
+        for price in (1.10, 1.27, 4330.0):
+            highs, lows, closes = series(price, 0.0015)
+            atr = lpf.live_atr(highs, lows, closes)
+            buckets.add(lpf.live_volatility_bucket(
+                lpf.live_atr_ratio(highs, lows, closes, atr)))
+        assert len(buckets) == 1, (
+            f"identical relative volatility gave different buckets by price "
+            f"scale: {buckets}"
+        )
+
+    def test_the_two_atr_ratio_implementations_agree_exactly(self):
+        """mt5_client (live) and live_parity_features (training) must not drift."""
+        import random
+        from data.market.mt5_client import _atr_ratio
+
+        rng = random.Random(4)
+        for _ in range(50):
+            vol = rng.choice([0.0004, 0.0012, 0.004])
+            closes = [1.1]
+            for _ in range(100):
+                closes.append(closes[-1] * (1 + rng.gauss(0, vol) / 1.1))
+            closes = closes[1:]
+            highs, lows = [], []
+            for c in closes:
+                r = abs(rng.gauss(0, vol * 0.8))
+                highs.append(c + r)
+                lows.append(c - r)
+            atr = lpf.live_atr(highs, lows, closes)
+            assert _atr_ratio(highs, lows, closes, atr) == pytest.approx(
+                lpf.live_atr_ratio(highs, lows, closes, atr), abs=1e-12
+            )
+
+    def test_get_indicators_emits_the_volatility_key(self):
+        """The key whose absence froze the score at 55."""
+        out = lpf.live_indicators(_make_candles())
+        assert "volatility" in out
+        assert out["volatility"] in {"very high", "high", "normal", "low"}
+
+    def test_fallback_indicator_rows_carry_the_key_too(self):
+        """A fallback row missing the key would silently reintroduce the bug."""
+        from data.market.mt5_client import FALLBACK_INDICATORS
+
+        for symbol, row in FALLBACK_INDICATORS.items():
+            assert "volatility" in row, f"{symbol} fallback lacks 'volatility'"
+
+    # --- market_regime ---------------------------------------------------
+    def test_sideways_is_reachable_with_a_real_band(self):
+        """Was only reachable when price == ma20 exactly."""
+        from config import MA_TREND_FLAT_ATR_MULT
+
+        closes = [1.1000] * 60          # perfectly flat -> price == ma20
+        atr = 0.0010
+        assert lpf.live_ma_trend(closes, atr) == "sideways"
+
+        # And just inside the band, where the old code said "uptrend".
+        closes = [1.1000] * 59 + [1.1000 + atr * MA_TREND_FLAT_ATR_MULT * 0.5]
+        assert lpf.live_ma_trend(closes, atr) == "sideways"
+
+    def test_outside_the_band_still_trends(self):
+        """The band must not swallow genuine trends."""
+        from config import MA_TREND_FLAT_ATR_MULT
+
+        atr = 0.0010
+        closes = [1.1000] * 59 + [1.1000 + atr * MA_TREND_FLAT_ATR_MULT * 3]
+        assert lpf.live_ma_trend(closes, atr) != "sideways"
+
+    def test_regime_reaches_more_than_one_value(self):
+        """The actual defect: always TRENDING."""
         from analysis.technical.regime import get_market_regime_from_snapshot
         from data.market.market_snapshot import MarketSnapshot
         from config import TF_TREND, TF_DECISION
 
-        # These are the only ma_trend values get_indicators can emit.
-        reachable = ["strong uptrend", "uptrend", "strong downtrend", "downtrend"]
-        for ma_trend in reachable:
-            data = {"ma_trend": ma_trend, "rsi": 50, "atr": 0.001, "macd": 0.0, "close": 1.1}
+        seen = set()
+        cases = [
+            ("strong uptrend", "normal"),
+            ("sideways", "normal"),
+            ("sideways", "very high"),
+            ("sideways", "low"),
+        ]
+        for ma_trend, volatility in cases:
+            data = {"ma_trend": ma_trend, "rsi": 50, "atr": 0.001, "macd": 0.0,
+                    "volatility": volatility, "close": 1.1}
             snap = MarketSnapshot(data={"X": {TF_TREND: data, TF_DECISION: data}})
-            assert get_market_regime_from_snapshot(snap, "X") == "TRENDING"
+            live = get_market_regime_from_snapshot(snap, "X")
 
-    def test_sideways_requires_exact_float_equality(self):
-        """The one ma_trend value that would unlock a non-TRENDING regime."""
-        import random
+            _, direction = lpf.trend_score_from_indicators(data)
+            mine = lpf.regime_from_scores(
+                direction, lpf.volatility_score_from_indicators(data)
+            )
+            assert mine == live, f"training/live regime disagree for {ma_trend}/{volatility}"
+            seen.add(live)
 
-        rng = random.Random(3)
-        hits = 0
-        for _ in range(20000):
-            closes = [1.1 + rng.gauss(0, 0.002) for _ in range(60)]
-            if lpf.live_ma_trend(closes) == "sideways":
-                hits += 1
-        assert hits == 0, f"expected 'sideways' to be unreachable, saw {hits}"
+        assert len(seen) >= 3, f"regime is still nearly constant: {seen}"
+        assert "RANGING" in seen, "RANGING is still unreachable"
 
-    def test_the_spec_records_all_three_constants(self):
-        assert spec.LIVE_CONSTANT_FEATURES == {
-            "trend_strength": 0.0,
-            "volatility_score": 55.0,
-            "market_regime": 1.0,
-        }
-
-    def test_only_seven_features_carry_information(self):
-        informative = set(spec.FEATURE_NAMES) - set(spec.LIVE_CONSTANT_FEATURES)
-        assert informative == {
-            "rsi", "atr", "macd", "trend_score", "momentum_score",
-            "session", "direction",
-        }
-        assert len(informative) == 7
+    def test_spec_records_no_remaining_constants(self):
+        assert spec.LIVE_CONSTANT_FEATURES == {}, (
+            "a feature is frozen again; document it or fix it"
+        )
 
 
 class TestEndToEndVectorParity:
@@ -352,15 +503,16 @@ class TestEndToEndVectorParity:
         assert h4_ind is not None and h1_ind is not None
 
         trend_score, trend_dir = lpf.trend_score_from_indicators(h4_ind)
-        momentum_score, _ = lpf.momentum_score_from_indicators(h1_ind)
-        vol = lpf.volatility_score_live()
+        momentum_score, mom_dir = lpf.momentum_score_from_indicators(h1_ind)
+        vol = lpf.volatility_score_from_indicators(h1_ind)
         regime = lpf.regime_from_scores(trend_dir, vol)
+        strength = lpf.mtf_strength_from_directions(trend_dir, mom_dir, mom_dir)
         bar_ts = h4[-1]["t"]
 
         # --- what training would build ---
         training_vec = build_feature_vector(
             rsi=h1_ind["rsi"], atr=h4_ind["atr"], macd=h1_ind["macd"],
-            trend_strength=lpf.trend_strength_live(),
+            trend_strength=strength,
             trend_score=trend_score, momentum_score=momentum_score,
             volatility_score=vol, market_regime=regime,
             session=spec.session_from_timestamp(bar_ts), direction=direction,
@@ -383,9 +535,14 @@ class TestEndToEndVectorParity:
         live_vol = get_volatility_score_from_snapshot(snap, "X")
         live_regime = get_market_regime_from_snapshot(snap, "X")
 
+        from analysis.multi_timeframe.analyzer_snapshot import (
+            get_multi_timeframe_analysis_from_snapshot,
+        )
+        live_mtf = get_multi_timeframe_analysis_from_snapshot(snap, "X")
+
         live_vec = build_feature_vector(
             rsi=h1_ind["rsi"], atr=h4_ind["atr"], macd=h1_ind["macd"],
-            trend_strength=0.0,
+            trend_strength=live_mtf.strength,
             trend_score=live_trend_score, momentum_score=live_momentum,
             volatility_score=live_vol, market_regime=live_regime,
             session=spec.session_from_timestamp(bar_ts), direction=direction,
