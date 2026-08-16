@@ -629,19 +629,44 @@ def main() -> int:
         print(f"  {label:28s} {statistics.mean(scores):9.4f} {len(scores):7d} "
               f"{spread:8.4f} {[round(s, 3) for s in scores]}")
 
+    # The decisive comparison. `direction` is not a predictor of trade quality;
+    # it is the side being evaluated. If BUY and SELL simply have different base
+    # rates over the sample — as they do whenever the sample trends — a model
+    # scores above 0.5 by learning "prefer BUY", which is a bet on the period,
+    # not a filter on the signal. Removing the column answers whether anything
+    # else is doing work.
+    dir_index = names.index("direction")
+    keep = [j for j in range(len(names)) if j != dir_index]
+    X_nodir = X_arr[:, keep]
+
+    nodir_scores = walk_forward_scores(X_nodir, y_arr, times, logistic_factory,
+                                       args.folds)
+    if nodir_scores:
+        print(f"  {'logistic WITHOUT direction':28s} {statistics.mean(nodir_scores):9.4f} "
+              f"{len(nodir_scores):7d} "
+              f"{max(nodir_scores) - min(nodir_scores):8.4f} "
+              f"{[round(s, 3) for s in nodir_scores]}")
+        baselines["logistic without direction"] = {
+            "mean": round(statistics.mean(nodir_scores), 4),
+            "folds": len(nodir_scores),
+            "spread": round(max(nodir_scores) - min(nodir_scores), 4),
+            "per_fold": [round(s, 4) for s in nodir_scores]}
+
     print(f"\n  constant predictor           {0.5:9.4f}  (by definition)")
     print(f"  majority class accuracy      {max(base_rate, 1 - base_rate):9.4f}  "
           f"(AUC 0.5 — accuracy is not evidence of signal here)")
     results["baselines"] = baselines
 
-    sub("logistic walk-forward vs its block-permutation null")
-    observed = statistics.mean(baselines.get("logistic regression",
-                                             {}).get("per_fold", [0.5]))
+    sub("DIRECTION-FREE logistic walk-forward vs its block-permutation null")
+    print("  Run without `direction`, because a base-rate difference between")
+    print("  BUY and SELL would otherwise beat any null while telling us")
+    print("  nothing about distinguishing a good trade from a bad one.\n")
+    observed = (statistics.mean(nodir_scores) if nodir_scores else 0.5)
     perms = max(20, args.permutations // 8)
     null_model = []
     for _ in range(perms):
         shuffled = block_permute(y_arr, block, rng)
-        scores = walk_forward_scores(X_arr, shuffled, times, logistic_factory,
+        scores = walk_forward_scores(X_nodir, shuffled, times, logistic_factory,
                                      args.folds)
         if scores:
             null_model.append(statistics.mean(scores))
@@ -776,6 +801,8 @@ def main() -> int:
     # ---------------------------------------------------------------- 7
     head("7. HORIZON SENSITIVITY")
     print("  Features are identical across horizons; only the label changes.")
+    print("  Scored DIRECTION-FREE, so a horizon cannot look good merely because")
+    print("  the BUY/SELL base rates diverge further at that distance.")
     print("  A rising-then-falling curve would mark a real timescale. A flat")
     print("  line near 0.50 marks structural absence.\n")
     print(f"  {'horizon':>8} {'rows':>7} {'win rate':>9} {'logistic':>9} "
@@ -806,7 +833,8 @@ def main() -> int:
             continue
         arr_X = np.asarray(rows_X)
         arr_y = np.asarray(rows_y, dtype=float)
-        sc = walk_forward_scores(arr_X, arr_y, rows_t, logistic_factory, args.folds)
+        sc = walk_forward_scores(arr_X[:, keep], arr_y, rows_t, logistic_factory,
+                                 args.folds)
         dev = max(abs(auc(arr_y, arr_X[:, j]) - 0.5) for j in range(len(names))
                   if not math.isnan(auc(arr_y, arr_X[:, j])))
         horizon_result[horizon] = {
@@ -857,22 +885,22 @@ def main() -> int:
               f"{' '.join(f'{a:+.4f}' for a in acs)}")
 
     # ---------------------------------------------------------------- 9
-    head("9. CROSS-SECTIONAL TEST (does pooling hide signal?)")
+    head("9. CROSS-SECTIONAL TEST (does pooling hide signal?) — direction-free")
     print(f"  {'scope':16s} {'rows':>7} {'mean AUC':>9} {'spread':>8} {'per fold'}")
 
     cross = {}
-    if all_scores:
+    if nodir_scores:
         cross["combined"] = {"rows": len(y),
-                             "mean": round(statistics.mean(all_scores), 4),
-                             "spread": round(max(all_scores) - min(all_scores), 4)}
-        print(f"  {'combined':16s} {len(y):7d} {statistics.mean(all_scores):9.4f} "
-              f"{max(all_scores) - min(all_scores):8.4f} "
-              f"{[round(s, 3) for s in all_scores]}")
+                             "mean": round(statistics.mean(nodir_scores), 4),
+                             "spread": round(max(nodir_scores) - min(nodir_scores), 4)}
+        print(f"  {'combined':16s} {len(y):7d} {statistics.mean(nodir_scores):9.4f} "
+              f"{max(nodir_scores) - min(nodir_scores):8.4f} "
+              f"{[round(s, 3) for s in nodir_scores]}")
     for symbol in symbols:
         idx = [i for i, m in enumerate(meta) if m["symbol"] == symbol]
         if len(idx) < 500:
             continue
-        sc = walk_forward_scores(X_arr[idx], y_arr[idx],
+        sc = walk_forward_scores(X_nodir[idx], y_arr[idx],
                                  [times[i] for i in idx], logistic_factory, args.folds)
         if not sc:
             continue
@@ -892,7 +920,7 @@ def main() -> int:
         idx = [i for i, m in enumerate(meta) if predicate(m)]
         if len(idx) < 500:
             continue
-        sc = walk_forward_scores(X_arr[idx], y_arr[idx], [times[i] for i in idx],
+        sc = walk_forward_scores(X_nodir[idx], y_arr[idx], [times[i] for i in idx],
                                  logistic_factory, args.folds)
         if sc:
             persistence[label] = {"mean": round(statistics.mean(sc), 4),
@@ -903,10 +931,10 @@ def main() -> int:
                   f"folds>0.5 {sum(1 for s in sc if s > 0.5)}/{len(sc)}  "
                   f"{[round(s, 3) for s in sc]}")
 
-    if all_scores:
-        above = sum(1 for s in all_scores if s > 0.5)
-        print(f"\n  combined folds above 0.5: {above}/{len(all_scores)}")
-        print(f"  fold spread: {max(all_scores) - min(all_scores):.4f}")
+    if nodir_scores:
+        above = sum(1 for s in nodir_scores if s > 0.5)
+        print(f"\n  direction-free folds above 0.5: {above}/{len(nodir_scores)}")
+        print(f"  fold spread: {max(nodir_scores) - min(nodir_scores):.4f}")
         print(f"  a signal present in one fold only is noise until shown otherwise")
     results["persistence"] = persistence
 
@@ -925,24 +953,29 @@ def main() -> int:
         f"block-permutation null")
 
     model_beats = results.get("model_permutation", {}).get("beats_noise", False)
-    add("model signal vs noise floor", 20 if model_beats else 0, 20,
-        f"logistic walk-forward {results.get('model_permutation', {}).get('observed', 0):.4f} "
+    add("model signal vs noise floor (direction-free)", 20 if model_beats else 0, 20,
+        f"direction-free logistic {results.get('model_permutation', {}).get('observed', 0):.4f} "
         f"at the {results.get('model_permutation', {}).get('percentile', 0):.0%} percentile")
 
-    best_base = max((v["mean"] for v in baselines.values()), default=0.5)
+    # Scored on the direction-free model for the same reason. A score built on
+    # "BUY wins more often than SELL over this sample" is a directional bet on
+    # the period, not an entry filter, and the rule layer has already chosen the
+    # side by the time this gate runs.
+    best_base = statistics.mean(nodir_scores) if nodir_scores else 0.5
     base_points = 15 if best_base >= 0.55 else (8 if best_base >= 0.52 else 0)
-    add("cheap-model performance", base_points, 15,
-        f"best simple baseline reached {best_base:.4f}")
+    add("cheap-model performance (direction-free)", base_points, 15,
+        f"direction-free baseline reached {best_base:.4f}; with direction it "
+        f"reached {max((v['mean'] for v in baselines.values()), default=0.5):.4f}")
 
-    if all_scores:
-        above = sum(1 for s in all_scores if s > 0.5)
-        stab_points = 15 if above == len(all_scores) else (
-            7 if above >= len(all_scores) - 1 else 0)
-        add("temporal stability", stab_points, 15,
-            f"{above}/{len(all_scores)} folds above 0.5, "
-            f"spread {max(all_scores) - min(all_scores):.4f}")
+    if nodir_scores:
+        above = sum(1 for s in nodir_scores if s > 0.5)
+        stab_points = 15 if above == len(nodir_scores) and best_base >= 0.52 else (
+            7 if above >= len(nodir_scores) - 1 and best_base >= 0.52 else 0)
+        add("temporal stability (direction-free)", stab_points, 15,
+            f"{above}/{len(nodir_scores)} direction-free folds above 0.5, "
+            f"spread {max(nodir_scores) - min(nodir_scores):.4f}")
     else:
-        add("temporal stability", 0, 15, "no folds evaluated")
+        add("temporal stability (direction-free)", 0, 15, "no folds evaluated")
 
     # A high score on one instrument means nothing if its folds disagree —
     # that is the shape of noise, not of an instrument-specific edge.
