@@ -1,0 +1,41 @@
+{
+  "fetched_at": "2026-08-16T14:22:53.819051+00:00",
+  "files": {
+    "EURUSD_H4": {
+      "path": "data\\historical\\EURUSD_H4.json",
+      "bars": 4800,
+      "first": "2023-07-13",
+      "last": "2026-08-14"
+    },
+    "EURUSD_H1": {
+      "path": "data\\historical\\EURUSD_H1.json",
+      "bars": 19200,
+      "first": "2023-07-12",
+      "last": "2026-08-14"
+    },
+    "XAUUSD_H4": {
+      "path": "data\\historical\\XAUUSD_H4.json",
+      "bars": 4800,
+      "first": "2023-07-10",
+      "last": "2026-08-14"
+    },
+    "XAUUSD_H1": {
+      "path": "data\\historical\\XAUUSD_H1.json",
+      "bars": 19200,
+      "first": "2023-05-11",
+      "last": "2026-08-14"
+    },
+    "GBPUSD_H4": {
+      "path": "data\\historical\\GBPUSD_H4.json",
+      "bars": 4800,
+      "first": "2023-07-13",
+      "last": "2026-08-14"
+    },
+    "GBPUSD_H1": {
+      "path": "data\\historical\\GBPUSD_H1.json",
+      "bars": 19200,
+      "first": "2023-07-12",
+      "last": "2026-08-14"
+    }
+  }
+}
