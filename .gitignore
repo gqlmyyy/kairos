@@ -27,6 +27,8 @@ data/exit_v2/
 models_backup/
 models/tmp_*.json
 models/test_*.json
+models/entry/research/
+research/
 
 # Reports & scratch output
 reports/output/

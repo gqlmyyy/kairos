@@ -25,8 +25,22 @@ Usage (on the Windows machine with MT5 running and logged in)::
     python scripts/fetch_training_candles.py
     python scripts/fetch_training_candles.py --years 3 --symbols EURUSD XAUUSD
 
-Writes ``data/historical/<SYMBOL>_<TF>.json`` — plain OHLC, no indicators, no
-labels. Read-only: it opens no positions and modifies no bot state.
+Writes ``data/historical/<SYMBOL>_<TF>.json`` — OHLC plus ``spread`` and
+``real_volume``, no indicators, no labels. Read-only: it opens no positions
+and modifies no bot state.
+
+Each row also carries ``spread`` and ``real_volume`` — fields MT5's rate
+struct returns alongside OHLC that earlier exports discarded. Both are
+properties of the closed bar itself, known at the same instant as its
+open/high/low/close, so capturing them adds no look-ahead risk beyond what
+this script already carries. ``real_volume`` is frequently 0 for FX/CFD
+symbols, since most brokers do not report true traded volume for
+over-the-counter instruments — this is reported, not assumed, by
+``analysis/features/microstructure_features.py``.
+
+Files fetched before this field was added do not have these keys.
+``load_candles`` in ``scripts/train_entry_model.py`` and the microstructure
+feature builder both treat their absence as "not available", not as zero.
 """
 
 from __future__ import annotations
@@ -76,6 +90,12 @@ def fetch(symbol: str, timeframe: str, count: int) -> list:
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"no candles returned for {symbol} {timeframe}: {mt5.last_error()}")
 
+    # MT5's rate struct also carries `spread` and `real_volume` per bar. Both
+    # were discarded here and in mt5_client.get_candles — not because they
+    # need special handling, but because nobody had asked for them yet. Spread
+    # is known at the same instant as OHLC (it is a property of that closed
+    # bar, not of the future), so capturing it adds no look-ahead risk beyond
+    # what get_candles already carries for open/high/low/close.
     rows = [
         {
             "t": float(r["time"]),
@@ -84,6 +104,8 @@ def fetch(symbol: str, timeframe: str, count: int) -> list:
             "low": float(r["low"]),
             "close": float(r["close"]),
             "volume": float(r["tick_volume"]),
+            "spread": float(r["spread"]),
+            "real_volume": float(r["real_volume"]),
         }
         for r in rates[:-1]
     ]
