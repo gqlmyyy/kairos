@@ -384,6 +384,9 @@ def generate_features(
     """Generate final Entry v2 feature dataset (no labels, no training)."""
 
 
+    from . import refuse_invalidated_pipeline
+    refuse_invalidated_pipeline("entry_v2.feature_engineering.generate_features")
+
     os.makedirs(output_dir, exist_ok=True)
 
     import pandas as pd  # type: ignore

@@ -99,8 +99,19 @@ logger = get_logger("xgboost_trainer")
 
 
 
-DEFAULT_MODEL_PATH = "models/entry/entry_model.json"
-DEFAULT_FEATURE_IMPORTANCE_PATH = "models/entry/feature_importance.json"
+# This trainer is LEGACY. It builds a 12-feature vector from the
+# `execution_dataset` table and labels it `actual_pnl > 0` — a different schema
+# and a different target from the 10 features the live path sends. It used to
+# default to models/entry/entry_model.json and overwrite it in place.
+#
+# It now writes to a research directory. Nothing here reaches production
+# without production_model_guard.install(), which would reject this schema
+# anyway. Keeping the trainer runnable preserves the ability to study the
+# execution dataset; keeping it pointed at production preserved nothing.
+DEFAULT_MODEL_PATH = os.path.join(
+    "models", "entry", "research", "legacy_execution_dataset", "entry_model.json")
+DEFAULT_FEATURE_IMPORTANCE_PATH = os.path.join(
+    "models", "entry", "research", "legacy_execution_dataset", "feature_importance.json")
 
 
 def _ensure_models_dir():
@@ -379,7 +390,12 @@ def train_model_from_db(
     else:
         logger.warning("Model version file missing after save_model: %s", version_path)
 
-    # Update latest pointer by copying file content
+    # Refuse to become a writer to the production artifact again, whatever
+    # `model_out` was set to by a caller.
+    from analysis.models.production_model_guard import assert_not_production
+    assert_not_production(model_out)
+
+    os.makedirs(os.path.dirname(model_out) or ".", exist_ok=True)
     with open(version_path, "rb") as fsrc:
         with open(model_out, "wb") as fdst:
             fdst.write(fsrc.read())
@@ -443,11 +459,31 @@ def train_model_from_db(
 # Auto retrain trigger helpers
 # ------------------------------
 
-def should_retrain(new_rows_count: int, last_train_ts: Optional[float], max_elapsed_hours: float = 6.0, row_threshold: int = 50) -> bool:
+def should_retrain(
+    new_rows_count: int,
+    last_train_ts: Optional[float],
+    max_elapsed_hours: float = 6.0,
+    row_threshold: int = 50,
+) -> bool:
+    """Whether enough genuinely new data has arrived to justify retraining.
+
+    `new_rows_count` must be a delta since the last training run. The caller
+    used to pass the *total* row count, so the first branch was true on every
+    call from the moment the table held 50 rows; and an unknown
+    `last_train_ts` returned True as well. Between them the function was a
+    constant `True` wearing the shape of a decision.
+
+    Unknown training time is now treated as "cannot establish that retraining
+    is due", which is the fail-closed reading: retraining replaces a model, so
+    absence of evidence must not authorise it.
+    """
+    if new_rows_count < 0:
+        raise ValueError(f"new_rows_count must be a non-negative delta, got {new_rows_count}")
+
     if new_rows_count >= row_threshold:
         return True
     if last_train_ts is None:
-        return True
+        return False
     elapsed_hours = (time.time() - float(last_train_ts)) / 3600.0
-    return elapsed_hours >= max_elapsed_hours
+    return elapsed_hours >= max_elapsed_hours and new_rows_count > 0
 

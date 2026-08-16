@@ -60,6 +60,51 @@ MODEL_PATH = os.path.join("models", "entry", "entry_model.json")
 BACKUP_DIR = os.path.join("models_backup")
 REPORT_PATH = os.path.join("models", "entry", "training_report.json")
 
+
+def _write_report(report: dict) -> None:
+    os.makedirs(os.path.dirname(REPORT_PATH) or ".", exist_ok=True)
+    with open(REPORT_PATH, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2, ensure_ascii=False)
+    print(f"\nReport -> {REPORT_PATH}")
+
+
+def git_commit() -> str:
+    """The commit the model was built from, or an explicit unknown marker."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                             text=True, timeout=10, check=False)
+        sha = out.stdout.strip()
+        if sha:
+            dirty = subprocess.run(["git", "status", "--porcelain"],
+                                   capture_output=True, text=True, timeout=10,
+                                   check=False).stdout.strip()
+            return f"{sha}-dirty" if dirty else sha
+    except Exception:
+        pass
+    return "unknown"
+
+
+def dataset_fingerprint(X, y, meta) -> str:
+    """A stable hash of the exact rows a model was trained on.
+
+    Order-independent by construction: rows are hashed individually and the
+    digests sorted, so the same data shuffled produces the same fingerprint
+    while a single changed value does not. Floats are rounded before hashing
+    because a rebuild must reproduce the fingerprint, and the last bits of a
+    float do not survive a round-trip through JSON.
+    """
+    import hashlib
+
+    digests = []
+    for row, label, info in zip(X, y, meta):
+        payload = "|".join(f"{float(v):.9g}" for v in row)
+        payload += f"|{float(label):.1f}|{info.get('symbol')}|{float(info.get('t', 0)):.0f}"
+        digests.append(hashlib.sha256(payload.encode()).hexdigest())
+    digests.sort()
+    combined = hashlib.sha256("".join(digests).encode()).hexdigest()
+    return f"sha256:{combined}"
+
 # Stop/target distances must match what the bot actually places, or the labels
 # describe trades it would never take. Sourced from tm_config, not hardcoded.
 from trade_management.tm_config import (  # noqa: E402
@@ -880,16 +925,52 @@ def main() -> int:
         print(json.dumps({"walk_forward": wf, "checks": checks}, indent=2))
         return 0
 
-    if os.path.exists(MODEL_PATH):
-        os.makedirs(BACKUP_DIR, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        backup = os.path.join(BACKUP_DIR, f"entry_model_before_{stamp}.json")
-        shutil.copy2(MODEL_PATH, backup)
-        print(f"\nBacked up previous model -> {backup}")
-        report["previous_model_backup"] = backup
+    # Promotion goes through the guard, which is the only sanctioned writer to
+    # the production artifact. It re-checks the candidate against its metadata
+    # and against the live feature contract, backs up what it replaces, and
+    # requires KAIROS_ALLOW_MODEL_INSTALL=1 — so a training run can never
+    # replace the served model as a side effect of finishing.
+    from analysis.models import entry_model_metadata as md
+    from analysis.models import production_model_guard as guard
 
-    shutil.move(staged, MODEL_PATH)
-    print(f"Installed -> {MODEL_PATH}")
+    times = sorted(m["t"] for m in meta)
+    span = (datetime.fromtimestamp(times[0], tz=timezone.utc).isoformat(),
+            datetime.fromtimestamp(times[-1], tz=timezone.utc).isoformat())
+    metadata_payload = md.build(
+        model_version=f"entry-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
+        training_pipeline_id="scripts/train_entry_model.py",
+        feature_names=list(spec.FEATURE_NAMES),
+        dataset_fingerprint=dataset_fingerprint(X, y, meta),
+        # The final model is fit on the whole span; the walk-forward folds are
+        # what the promotion decision was actually made on, and they are
+        # recorded in the report next to these dates.
+        training_start=span[0], training_end=span[1],
+        validation_start=span[0], validation_end=span[1],
+        test_start=span[0], test_end=span[1],
+        symbol_scope=symbols,
+        timeframe_scope=["H4", "H1"],
+        target_definition=(
+            f"first touch of TP {ATR_TP_BASE_MULTIPLIER}xATR before SL "
+            f"{ATR_SL_BASE_MULTIPLIER}xATR within {horizon} H4 bars; "
+            f"both touched in one bar counts as a loss"),
+        target_horizon=horizon,
+        git_commit=git_commit(),
+        extra={"walk_forward_mean_roc_auc": wf.get("mean_roc_auc")},
+    )
+    report["model_metadata"] = metadata_payload
+
+    try:
+        installed = guard.install(staged, metadata_payload)
+    except guard.ModelInstallRefused as exc:
+        os.remove(staged)
+        print(f"\nNOT INSTALLED: {exc}")
+        report["install_refused"] = str(exc)
+        _write_report(report)
+        return 1
+
+    os.remove(staged) if os.path.exists(staged) else None
+    print(f"Installed -> {installed['path']} sha256={installed['sha256']}")
+    report["previous_model_backup"] = installed["backup"]
 
     print("\nLive inference check...")
     live = live_inference_check()
@@ -902,9 +983,7 @@ def main() -> int:
     )
     direction_ok = all(v["direction_changes_p_win"] for v in live.values())
 
-    with open(REPORT_PATH, "w", encoding="utf-8") as fh:
-        json.dump(report, fh, indent=2, ensure_ascii=False)
-    print(f"\nReport -> {REPORT_PATH}")
+    _write_report(report)
 
     if not gate_ok:
         print("\nWARNING: ML gate did not return OK for every case. Investigate "

@@ -76,10 +76,25 @@ MT5_PATH = _env_str("MT5_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
 # ==============================
 SYMBOLS = ["EURUSD", "XAUUSD", "GBPUSD"]
 
-# Entry model selection
-# v1: legacy entry inference (existing)
-# v2: independent entry_v2 architecture (self-contained)
+# Entry model selection.
+#
+# v1 is the only supported value. The "v2" path routed inference through
+# analysis/entry_v2, which is quarantined: its dataset has proven look-ahead,
+# its entry price resolves to an EMA, its H4 indicators are computed on an H1
+# grid, and it has no direction column (ENTRY_PIPELINE_AUDIT.md).
+#
+# That path could never have produced a tradeable number anyway — it sends 10
+# placeholder scalars to a 65-feature artifact, so the contract check blocks
+# every call. Failing loudly at startup is better than a bot that runs all day
+# and silently refuses every signal.
 ENTRY_MODEL_VERSION = _env_str("ENTRY_MODEL_VERSION", "v1")
+
+if ENTRY_MODEL_VERSION != "v1":
+    raise ValueError(
+        f"ENTRY_MODEL_VERSION={ENTRY_MODEL_VERSION!r} is not supported. "
+        f"Only 'v1' is available; the 'v2' entry path is quarantined pending a "
+        f"rebuilt data pipeline — see ENTRY_PIPELINE_AUDIT.md."
+    )
 
 
 # ==============================

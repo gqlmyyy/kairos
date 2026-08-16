@@ -47,7 +47,11 @@ from analysis.entry_v2.feature_schema import FEATURE_COLUMNS
 DATASET_CSV = os.path.join(REPO_ROOT, "data", "entry_v2", "labeled_dataset.csv")
 AUDIT_OUT_DIR = os.path.join(REPO_ROOT, "data", "entry_v2", "audit_reports")
 
-ENTRY_MODEL_PATH = os.path.join(REPO_ROOT, "models", "entry", "entry_model.json")
+# QUARANTINED alongside analysis/entry_v2 — this script trains on the same
+# invalidated dataset and used to overwrite the production model in place, with
+# no metadata, no backup and no gate. It now writes a research artifact.
+ENTRY_MODEL_PATH = os.path.join(
+    REPO_ROOT, "models", "entry", "research", "legacy_verify_v2", "entry_model.json")
 ENTRY_MODEL_FEATURE_STATS_PATH = os.path.join(REPO_ROOT, "models", "entry", "training_feature_stats.json")
 
 RANDOM_SEED = 42
@@ -274,6 +278,9 @@ def _train_final_model(X: np.ndarray, y: np.ndarray, best_params: Dict[str, Any]
 def _save_booster_to_entry_json(booster: Any, path: str) -> None:
     _ensure_dir(os.path.dirname(path))
     tmp = path + ".tmp"
+    from analysis.models.production_model_guard import assert_not_production
+    assert_not_production(path)
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     booster.save_model(tmp)
     # replace atomically-ish
     os.replace(tmp, path)

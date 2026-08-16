@@ -14,6 +14,15 @@ from data.storage.database import get_conn
 
 logger = get_logger("system_orchestrator")
 
+AUTO_RETRAIN_ENV_VAR = "KAIROS_ENABLE_AUTO_RETRAIN"
+
+
+def auto_retrain_enabled() -> bool:
+    """Whether the daily cycle may train at all. Off unless explicitly set."""
+    import os
+
+    return os.environ.get(AUTO_RETRAIN_ENV_VAR, "").strip() in {"1", "true", "TRUE", "yes"}
+
 
 def _get_execution_dataset_stats() -> Dict[str, Any]:
     """Return lightweight stats for execution_dataset.
@@ -33,12 +42,15 @@ def _get_execution_dataset_stats() -> Dict[str, Any]:
         total = int(row[0] or 0)
         last_updated_at = row[1]
 
-        # new_rows_count is approximated using updated time; we keep it simple.
-        # If last_updated_at is null => 0.
-        # NOTE: For a precise delta, we'd need an additional cursor/table.
-        # Here we approximate by using total as proxy.
-        # This is enough to trigger retrain frequently in early stages.
-        new_rows_count = total
+        # A delta, not the total. Passing the total made should_retrain() return
+        # True on every call once the table held 50 rows, which is how a
+        # "retrain when there is new data" policy became "retrain always".
+        #
+        # Without a watermark table there is no way to compute a true delta, so
+        # report 0 — no new data can be demonstrated. That is the fail-closed
+        # answer: retraining replaces a model, and "I don't know" must not
+        # authorise that.
+        new_rows_count = 0
 
         return {
             "total_rows": total,
@@ -89,6 +101,29 @@ def run_daily_cycle() -> None:
     # We currently rely on performance_monitor global buffer elsewhere.
     perf_snapshot: Dict[str, Any] = {}
 
+    # Automatic retraining is DISABLED and opt-in.
+    #
+    # This block used to call train_model_from_db(strict_mode=True), which wrote
+    # a 12-feature model straight over models/entry/entry_model.json and then
+    # hot-reloaded it — no schema check, no backup, no promotion gate, and no
+    # human. The 12-feature schema does not match the 10 features the live path
+    # sends, so a single firing would have swapped the entry model for one the
+    # gate must reject, on a target (`actual_pnl > 0`) that is not the target
+    # the entry model is meant to predict.
+    #
+    # It never fired only because start_daily_orchestrator_thread is imported
+    # and never called. That is luck, not design. Retraining now requires
+    # KAIROS_ENABLE_AUTO_RETRAIN=1, and even then it may not touch production:
+    # promotion goes through analysis.models.production_model_guard.install(),
+    # which needs its own separate opt-in.
+    if not auto_retrain_enabled():
+        logger.info(
+            "Automatic retraining disabled (set %s=1 to enable). "
+            "total_rows=%s — no model was trained or replaced.",
+            AUTO_RETRAIN_ENV_VAR, str(total_rows),
+        )
+        return
+
     try:
         if should_retrain(
             new_rows_count=int(new_rows_count),
@@ -97,15 +132,13 @@ def run_daily_cycle() -> None:
             logger.info("Retrain triggered by should_retrain()")
             result = train_model_from_db(strict_mode=True)
 
-            # Ensure overwrite pointer happens inside trainer.
-            # Reload model with hot reload.
-            _model, _ver = load_latest_model(force_reload=True)
-
+            # Deliberately NOT reloading production here. The trainer writes a
+            # research artifact; replacing what is served is a separate act.
             logger.info(
-                "Retrain completed | ok=%s reason=%s version=%s",
+                "Retrain completed into a research artifact | ok=%s reason=%s. "
+                "Production model unchanged — promote via production_model_guard.install().",
                 str(result.get("ok")),
                 str(result.get("reason")) if "reason" in result else "",
-                str(_ver),
             )
         else:
             logger.info("Retrain not needed today")
