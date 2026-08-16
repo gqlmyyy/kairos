@@ -6,6 +6,7 @@ import os
 from datetime import datetime, timezone
 from utils.logger import get_logger
 from analysis.models import entry_feature_contract as contract
+from analysis.models import entry_model_metadata as metadata
 from analysis.models.entry_feature_spec import (
     FEATURE_NAMES as LIVE_FEATURE_NAMES,
     build_feature_vector,
@@ -15,6 +16,7 @@ from analysis.models.entry_feature_spec import (
 logger = get_logger("xgboost_v2")
 
 _model = None
+_metadata = None
 MODEL_PATH = "models/entry/entry_model.json"
 
 # The feature order, encodings and missing-value policy live in
@@ -39,7 +41,7 @@ def _as_dict(result) -> dict:
  
 def load_v2_model():
     """تحميل النموذج (مرة واحدة فقط - cached)"""
-    global _model
+    global _model, _metadata
     if _model is not None:
         return _model
     if not os.path.exists(MODEL_PATH):
@@ -66,10 +68,39 @@ def load_v2_model():
         logger.error(f"Failed to load XGBoost v2 model: {e}")
         return None
 
+    # Provenance gate. A booster that parses is not yet a model we may serve:
+    # nothing inside the artifact says which feature schema, which label
+    # definition, or which dataset it came from. Four separate trainers in this
+    # repository have written to this one path with three different schemas, so
+    # "it loaded" is not evidence of anything. Refuse anything that cannot
+    # prove its identity, and refuse it here rather than at predict time, so a
+    # mismatched artifact is never held in the cache.
+    try:
+        meta = metadata.load(MODEL_PATH)
+    except metadata.MetadataError as e:
+        logger.info(f"[VERIFY] XGBOOST MODEL LOADED path={MODEL_PATH} available=False")
+        logger.error(f"[ML_CONTRACT] refusing to serve {MODEL_PATH}: {e}")
+        return None
+
+    for reason in (
+        metadata.validate_against_booster(meta, booster),
+        metadata.validate_for_serving(meta, live_feature_names=LIVE_FEATURE_NAMES),
+    ):
+        if reason is not None:
+            logger.info(f"[VERIFY] XGBOOST MODEL LOADED path={MODEL_PATH} available=False")
+            logger.error(f"[ML_CONTRACT] refusing to serve {MODEL_PATH}: {reason}")
+            return None
+
     _model = booster
+    _metadata = meta
     logger.info(f"[VERIFY] XGBOOST MODEL LOADED path={MODEL_PATH} available=True")
-    logger.info("XGBoost v2 model loaded successfully")
+    logger.info("XGBoost v2 model loaded: %s", meta.describe())
     return _model
+
+
+def loaded_metadata():
+    """Metadata of the currently cached model, or None when nothing is served."""
+    return _metadata
 
  
  

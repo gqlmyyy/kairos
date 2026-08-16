@@ -64,7 +64,17 @@ class TrainConfig:
     min_rows: int = 200
 
 
-DEFAULT_OUTPUT_MODEL_PATH = "models/entry/entry_model.json"
+# QUARANTINED. This trainer produced the artifact currently deployed, from a
+# dataset with proven look-ahead (the H4 candle attached at decision time is
+# the one that opens at t and closes three hours later), an entry price that
+# resolves to h4_ema_50 rather than a tradeable price, H4 indicators computed
+# over a repeated H1 grid, and no direction column. See ENTRY_PIPELINE_AUDIT.md.
+#
+# It used to default to models/entry/entry_model.json and copy itself over the
+# live pointer at the end of training. It now writes to a research directory
+# and production_model_guard refuses the production path outright.
+DEFAULT_OUTPUT_MODEL_PATH = os.path.join(
+    "models", "entry", "research", "legacy_entry_v2", "entry_model.json")
 
 
 def _ensure_dirs(output_dir: str) -> None:
@@ -237,6 +247,9 @@ def train_entry_xgboost(
 ) -> Dict[str, Any]:
     """Train entry v2 model and save artifacts."""
 
+    from . import refuse_invalidated_pipeline
+    refuse_invalidated_pipeline("entry_v2.entry_xgboost_trainer.train_entry_xgboost")
+
     _ensure_dirs(output_dir)
     validate_feature_columns(feature_columns)
 
@@ -382,13 +395,15 @@ def train_entry_xgboost(
 
     # Copy/overwrite production pointer if desired
     # NOTE: This is Entry-only. Exit unaffected.
+    from analysis.models.production_model_guard import assert_not_production
+    assert_not_production(model_out_path)
     try:
-        os.makedirs(os.path.dirname(model_out_path), exist_ok=True)
+        os.makedirs(os.path.dirname(model_out_path) or ".", exist_ok=True)
         with open(entry_model_json_path, "rb") as src:
             with open(model_out_path, "wb") as dst:
                 dst.write(src.read())
     except Exception as e:
-        logger.warning("Failed to copy entry model to production pointer: %s", e)
+        logger.warning("Failed to copy entry model to research artifact: %s", e)
 
     return {
         "ok": True,

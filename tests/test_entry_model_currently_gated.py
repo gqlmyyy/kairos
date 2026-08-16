@@ -67,8 +67,12 @@ def test_predict_with_v2_is_gated_shut_against_the_real_model():
 
     assert result["available"] is False
     assert result["p_win"] is None
-    assert result["status"] == "ML_GATE_INVALID"
-    assert "65" in result["reason"] and "10" in result["reason"]
+    # Blocked at load rather than at the contract check: the deployed artifact
+    # has no metadata sidecar, so it is refused before a feature vector exists.
+    # The guarantee under test is "no tradeable number", not which of the two
+    # blocking statuses reports it.
+    assert result["status"] in {"ML_GATE_INVALID", "ML_MODEL_MISSING"}
+    assert "entry_model.json" in result["reason"]
 
 
 def test_the_gate_result_would_be_rejected_by_trade_gate():

@@ -109,6 +109,9 @@ def build_dataset(
     parquet_filename: Optional[str] = None,
     csv_filename: Optional[str] = None,
 ) -> Dict[str, Any]:
+    from . import refuse_invalidated_pipeline
+    refuse_invalidated_pipeline("entry_v2.dataset_builder.build_dataset")
+
     symbols = symbols or sorted(list(SUPPORTED_SYMBOLS))
     # H4+H1 only. QuantDinger M15 often returns empty.
     timeframes = timeframes or ["H4", "H1"]

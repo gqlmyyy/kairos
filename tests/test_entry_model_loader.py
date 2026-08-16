@@ -27,6 +27,31 @@ import pytest
 
 import analysis.models.xgboost_v2_inference as inf
 from analysis.models import entry_feature_spec as spec
+from analysis.models import entry_model_metadata as md
+
+
+def write_sidecar(model_path, **overrides):
+    """A model is only loadable with provenance, so fixtures must supply it."""
+    payload = md.build(
+        model_version="test-model",
+        training_pipeline_id="tests/test_entry_model_loader.py",
+        feature_names=list(spec.FEATURE_NAMES),
+        dataset_fingerprint="sha256:" + "0" * 64,
+        training_start="2024-01-01T00:00:00+00:00",
+        training_end="2024-06-01T00:00:00+00:00",
+        validation_start="2024-06-01T00:00:00+00:00",
+        validation_end="2024-09-01T00:00:00+00:00",
+        test_start="2024-09-01T00:00:00+00:00",
+        test_end="2024-12-01T00:00:00+00:00",
+        symbol_scope=["EURUSD"],
+        timeframe_scope=["H4", "H1"],
+        target_definition="first touch of TP before SL",
+        target_horizon=24,
+        git_commit="0" * 40,
+    )
+    payload.update(overrides)
+    md.write(model_path, payload)
+    return payload
 
 
 @pytest.fixture
@@ -43,6 +68,7 @@ def good_model(tmp_path):
     )
     path = str(tmp_path / "good.json")
     booster.save_model(path)
+    write_sidecar(path)
     return path
 
 
@@ -58,10 +84,12 @@ def corrupt_model(tmp_path):
 def _reset_cache(monkeypatch):
     """Never let one test's cache leak into the next, or into the real module."""
     monkeypatch.setattr(inf, "_model", None)
+    monkeypatch.setattr(inf, "_metadata", None)
     original = inf.MODEL_PATH
     yield
     monkeypatch.setattr(inf, "MODEL_PATH", original)
     monkeypatch.setattr(inf, "_model", None)
+    monkeypatch.setattr(inf, "_metadata", None)
 
 
 class TestFailedLoadDoesNotPoisonTheCache:
@@ -158,3 +186,68 @@ class TestATenFeatureModelPassesTheGate:
         # Whether the probabilities differ depends on what the model learned;
         # what must hold is that both are produced without the gate blocking.
         assert buy["p_win"] is not None and sell["p_win"] is not None
+
+
+class TestProvenanceIsRequiredToServe:
+    """A booster that parses is not yet a model we may trade on.
+
+    Four trainers in this repository have written three different schemas to
+    one filename. "It loaded" proves nothing about which schema it speaks, so
+    the loader demands a metadata sidecar and checks it against both the
+    artifact and the live feature contract.
+    """
+
+    def test_a_model_without_a_sidecar_is_refused(self, monkeypatch, good_model):
+        import os
+
+        os.remove(md.metadata_path_for(good_model))
+        monkeypatch.setattr(inf, "MODEL_PATH", good_model)
+        assert inf.load_v2_model() is None, (
+            "a model with no declared provenance was served"
+        )
+
+    def test_refusal_leaves_the_cache_empty(self, monkeypatch, good_model):
+        import os
+
+        os.remove(md.metadata_path_for(good_model))
+        monkeypatch.setattr(inf, "MODEL_PATH", good_model)
+        inf.load_v2_model()
+        assert inf._model is None
+        assert inf.loaded_metadata() is None
+
+    def test_the_same_names_in_a_different_order_are_refused(self, monkeypatch, good_model):
+        """The count matches and every name is present — only the order moved.
+
+        XGBoost would accept this silently and return a confident number for a
+        vector whose columns mean something else.
+        """
+        names = list(spec.FEATURE_NAMES)
+        names[0], names[1] = names[1], names[0]
+        write_sidecar(good_model, feature_names=names,
+                      feature_order=list(range(len(names))))
+        monkeypatch.setattr(inf, "MODEL_PATH", good_model)
+        assert inf.load_v2_model() is None
+
+    def test_a_wrong_feature_schema_version_is_refused(self, monkeypatch, good_model):
+        write_sidecar(good_model, feature_schema_version="entry-1-obsolete")
+        monkeypatch.setattr(inf, "MODEL_PATH", good_model)
+        assert inf.load_v2_model() is None
+
+    def test_a_wrong_label_schema_version_is_refused(self, monkeypatch, good_model):
+        """Same features, different question. The model would answer the wrong one."""
+        write_sidecar(good_model, label_schema_version="pnl-sign-1")
+        monkeypatch.setattr(inf, "MODEL_PATH", good_model)
+        assert inf.load_v2_model() is None
+
+    def test_metadata_disagreeing_with_the_artifact_is_refused(self, monkeypatch, good_model):
+        names = list(spec.FEATURE_NAMES) + ["invented_feature"]
+        write_sidecar(good_model, feature_names=names, feature_count=len(names),
+                      feature_order=list(range(len(names))))
+        monkeypatch.setattr(inf, "MODEL_PATH", good_model)
+        assert inf.load_v2_model() is None
+
+    def test_a_valid_sidecar_still_loads(self, monkeypatch, good_model):
+        """Guard against a vacuous suite: the happy path must remain reachable."""
+        monkeypatch.setattr(inf, "MODEL_PATH", good_model)
+        assert inf.load_v2_model() is not None
+        assert inf.loaded_metadata().feature_count == spec.FEATURE_COUNT

@@ -93,10 +93,14 @@ class TestEncodingParity:
     @pytest.mark.parametrize("regime,expected", [
         ("TRENDING", 1.0), ("trending", 1.0),
         ("RANGING", 0.0), ("ranging", 0.0),
-        # Both fall to the default — an inherited collision, pinned so it stays
-        # identical on both sides rather than being fixed on one only.
-        ("HIGH_VOLATILITY", 0.0), ("LOW_VOLATILITY", 0.0),
-        ("UNKNOWN", 0.0), (None, 0.0), ("", 0.0),
+        # All four regimes now carry their own value. They used to share 0.0
+        # with RANGING, which kept live and training in agreement while making
+        # both equally blind to three of the four states.
+        ("HIGH_VOLATILITY", 2.0), ("high_volatility", 2.0),
+        ("LOW_VOLATILITY", 3.0), ("low_volatility", 3.0),
+        # Unknown stays distinct from every real regime: "could not determine"
+        # is a different statement from "ranging".
+        ("UNKNOWN", -1.0), (None, -1.0), ("", -1.0),
     ])
     def test_regime_encoding(self, regime, expected):
         assert spec.encode_regime(regime) == expected

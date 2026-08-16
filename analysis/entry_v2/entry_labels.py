@@ -393,6 +393,9 @@ def generate_entry_labels_v2(
 ) -> Dict[str, Any]:
     """Generate labels, validate, save, and return a label generation report."""
 
+    from . import refuse_invalidated_pipeline
+    refuse_invalidated_pipeline("entry_v2.entry_labels.generate_entry_labels_v2")
+
     if parquet_preferred and os.path.exists(engineered_parquet_path):
         df = pd.read_parquet(engineered_parquet_path)
     else:

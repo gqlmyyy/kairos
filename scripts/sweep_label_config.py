@@ -50,6 +50,7 @@ from analysis.features import live_parity_features as lpf  # noqa: E402
 from analysis.models import entry_feature_spec as spec  # noqa: E402
 
 import train_entry_model as trainer  # noqa: E402
+from analysis.features import timeframe_alignment as ta  # noqa: E402
 
 CANDLE_DIR = os.path.join("data", "historical")
 
@@ -83,18 +84,19 @@ def build_feature_cache(candles_by_symbol: Dict[str, Dict[str, List]]) -> List[D
 
     for symbol, tf_map in candles_by_symbol.items():
         h4, h1 = tf_map["H4"], tf_map["H1"]
-        h1_times = [c["t"] for c in h1]
 
         for i in range(trainer.WARMUP_BARS, len(h4) - max(HORIZONS) - 1):
-            bar_t = h4[i]["t"]
+            # Decision at the H4 bar's close; only closed candles are visible.
+            bar_t = ta.decision_time(h4, i, "H4")
 
-            h4_ind = lpf.live_indicators(h4[: i + 1])
+            h4_visible = ta.closed_slice(h4, "H4", bar_t)
+            h1_visible = ta.closed_slice(h1, "H1", bar_t)
+            if len(h4_visible) < trainer.WARMUP_BARS or len(h1_visible) < trainer.WARMUP_BARS:
+                continue
+            h4_ind = lpf.live_indicators(h4_visible)
             if h4_ind is None:
                 continue
-            pos = bisect.bisect_right(h1_times, bar_t)
-            if pos < trainer.WARMUP_BARS:
-                continue
-            h1_ind = lpf.live_indicators(h1[:pos])
+            h1_ind = lpf.live_indicators(h1_visible)
             if h1_ind is None:
                 continue
 

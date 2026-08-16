@@ -50,6 +50,7 @@ from typing import Any, Dict, List, Optional, Tuple
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from analysis.features import live_parity_features as lpf  # noqa: E402
+from analysis.features import timeframe_alignment as ta  # noqa: E402
 from analysis.models import entry_feature_spec as spec  # noqa: E402
 from utils.logger import get_logger  # noqa: E402
 
@@ -59,6 +60,51 @@ CANDLE_DIR = os.path.join("data", "historical")
 MODEL_PATH = os.path.join("models", "entry", "entry_model.json")
 BACKUP_DIR = os.path.join("models_backup")
 REPORT_PATH = os.path.join("models", "entry", "training_report.json")
+
+
+def _write_report(report: dict) -> None:
+    os.makedirs(os.path.dirname(REPORT_PATH) or ".", exist_ok=True)
+    with open(REPORT_PATH, "w", encoding="utf-8") as fh:
+        json.dump(report, fh, indent=2, ensure_ascii=False)
+    print(f"\nReport -> {REPORT_PATH}")
+
+
+def git_commit() -> str:
+    """The commit the model was built from, or an explicit unknown marker."""
+    import subprocess
+    try:
+        out = subprocess.run(["git", "rev-parse", "HEAD"], capture_output=True,
+                             text=True, timeout=10, check=False)
+        sha = out.stdout.strip()
+        if sha:
+            dirty = subprocess.run(["git", "status", "--porcelain"],
+                                   capture_output=True, text=True, timeout=10,
+                                   check=False).stdout.strip()
+            return f"{sha}-dirty" if dirty else sha
+    except Exception:
+        pass
+    return "unknown"
+
+
+def dataset_fingerprint(X, y, meta) -> str:
+    """A stable hash of the exact rows a model was trained on.
+
+    Order-independent by construction: rows are hashed individually and the
+    digests sorted, so the same data shuffled produces the same fingerprint
+    while a single changed value does not. Floats are rounded before hashing
+    because a rebuild must reproduce the fingerprint, and the last bits of a
+    float do not survive a round-trip through JSON.
+    """
+    import hashlib
+
+    digests = []
+    for row, label, info in zip(X, y, meta):
+        payload = "|".join(f"{float(v):.9g}" for v in row)
+        payload += f"|{float(label):.1f}|{info.get('symbol')}|{float(info.get('t', 0)):.0f}"
+        digests.append(hashlib.sha256(payload.encode()).hexdigest())
+    digests.sort()
+    combined = hashlib.sha256("".join(digests).encode()).hexdigest()
+    return f"sha256:{combined}"
 
 # Stop/target distances must match what the bot actually places, or the labels
 # describe trades it would never take. Sourced from tm_config, not hardcoded.
@@ -106,19 +152,37 @@ def load_candles(symbol: str, timeframe: str, directory: str) -> List[Dict[str, 
 
 def simulate_trade(
     candles: List[Dict[str, float]],
-    entry_idx: int,
+    decision_idx: int,
     direction: str,
     atr: float,
     horizon: int,
 ) -> Optional[Dict[str, Any]]:
-    """Walk forward from entry_idx+1 and see whether TP or SL is touched first.
+    """Label a trade decided at the close of `decision_idx`.
 
-    Returns None when neither is reached inside the horizon. Those rows are
-    dropped rather than labelled by proximity: the previous pipeline's
-    `fallback_neither` rule called a trade a win if the final close sat nearer
-    TP than SL, which is a different question from the one the model is asked.
+    Entry price is the OPEN of the following bar, not the close of the decision
+    bar. The close is the price that told us to trade; by the time we know it,
+    it is history. The first price actually obtainable is the next bar's open,
+    so that is what the barriers are measured from and what a live market order
+    would have filled near.
+
+    The old entry_v2 pipeline used `h4_ema_50` here — a 50-period average, off
+    the real close by 0.92 ATR on average against barriers of 1.0 and 1.5 ATR.
+    Using this bar's close instead would be subtler but still wrong: it prices
+    a fill nobody could have received.
+
+    Returns None when neither barrier is touched inside the horizon. Those rows
+    are dropped rather than labelled by proximity: entry_v2's `fallback_neither`
+    rule called a trade a win when the final close sat nearer TP than SL, which
+    answers a different question and covered 9% of its dataset.
+
+    Spread and commission are NOT modelled — no historical spread series is
+    available. Both make the target harder, never easier, so this labelling is
+    optimistic by a known sign.
     """
-    entry = float(candles[entry_idx]["close"])
+    entry_idx = decision_idx + 1
+    if entry_idx >= len(candles):
+        return None
+    entry = float(candles[entry_idx]["open"])
     sl_dist = atr * ATR_SL_BASE_MULTIPLIER
     tp_dist = atr * ATR_TP_BASE_MULTIPLIER
     if sl_dist <= 0 or tp_dist <= 0:
@@ -129,8 +193,9 @@ def simulate_trade(
     else:
         tp, sl = entry - tp_dist, entry + sl_dist
 
-    end = min(entry_idx + horizon, len(candles) - 1)
-    for j in range(entry_idx + 1, end + 1):
+    # The entry bar itself can hit a barrier after we are filled at its open.
+    end = min(entry_idx + horizon - 1, len(candles) - 1)
+    for j in range(entry_idx, end + 1):
         hi = float(candles[j]["high"])
         lo = float(candles[j]["low"])
 
@@ -143,11 +208,14 @@ def simulate_trade(
         # Count it as a loss — the pessimistic reading, so the model is never
         # trained to expect a win it may not have received.
         if hit_tp and hit_sl:
-            return {"label": 0.0, "reason": "both_same_bar", "bars": j - entry_idx}
+            return {"label": 0.0, "reason": "both_same_bar",
+                    "bars": j - entry_idx + 1, "entry_price": entry}
         if hit_tp:
-            return {"label": 1.0, "reason": "tp_first", "bars": j - entry_idx}
+            return {"label": 1.0, "reason": "tp_first",
+                    "bars": j - entry_idx + 1, "entry_price": entry}
         if hit_sl:
-            return {"label": 0.0, "reason": "sl_first", "bars": j - entry_idx}
+            return {"label": 0.0, "reason": "sl_first",
+                    "bars": j - entry_idx + 1, "entry_price": entry}
 
     return None
 
@@ -214,19 +282,24 @@ def choose_horizon(candles_by_symbol: Dict[str, List], probe_horizon: int = 48) 
 # Dataset construction
 # ---------------------------------------------------------------------------
 
-def _h1_index(h1: List[Dict[str, float]]) -> List[float]:
-    return [c["t"] for c in h1]
-
-
 def build_dataset(
     candles_by_symbol: Dict[str, Dict[str, List]],
     horizon: int,
 ) -> Tuple[List[List[float]], List[float], List[Dict[str, Any]]]:
     """Build X, y and per-row metadata.
 
-    One H4 bar yields up to two rows (BUY and SELL). Features come from bars
-    <= i; labels from bars > i. H1 is joined by last-closed-at-or-before, so no
-    H1 bar from the future leaks in.
+    One H4 bar yields up to two rows (BUY and SELL).
+
+    The decision timestamp is the H4 bar's CLOSE, not its open. That is the
+    first moment the bar's indicators exist and the moment the live bot wakes
+    and acts. Everything the row may see is derived from `closed_slice`, so no
+    partially-formed candle on any timeframe can reach a feature — the defect
+    that invalidated the entry_v2 dataset.
+
+    Getting the decision time right also recovers information that the previous
+    join threw away. Bisecting H1 on the H4 bar's *open* stopped at the first
+    H1 bar of four; at the H4 close all four have closed and are legitimately
+    available.
     """
     X: List[List[float]] = []
     y: List[float] = []
@@ -235,20 +308,22 @@ def build_dataset(
     for symbol, tf_map in candles_by_symbol.items():
         h4 = tf_map["H4"]
         h1 = tf_map["H1"]
-        h1_times = _h1_index(h1)
 
         for i in range(WARMUP_BARS, len(h4) - horizon - 1):
-            bar_close_t = h4[i]["t"]
+            # The moment of decision: this bar has just closed.
+            decided_at = ta.decision_time(h4, i, "H4")
 
-            h4_ind = lpf.live_indicators(h4[: i + 1])
+            h4_visible = ta.closed_slice(h4, "H4", decided_at)
+            if len(h4_visible) < WARMUP_BARS:
+                continue
+            h4_ind = lpf.live_indicators(h4_visible)
             if h4_ind is None:
                 continue
 
-            # Most recent H1 bar closing at or before this H4 bar.
-            pos = bisect.bisect_right(h1_times, bar_close_t)
-            if pos < WARMUP_BARS:
+            h1_visible = ta.closed_slice(h1, "H1", decided_at)
+            if len(h1_visible) < WARMUP_BARS:
                 continue
-            h1_ind = lpf.live_indicators(h1[:pos])
+            h1_ind = lpf.live_indicators(h1_visible)
             if h1_ind is None:
                 continue
 
@@ -262,7 +337,9 @@ def build_dataset(
             # is not fetched for training, so H1 stands in for it — recorded
             # here rather than hidden, and the encoding is the shared one.
             strength = lpf.mtf_strength_from_directions(trend_dir, mom_dir, mom_dir)
-            session = spec.session_from_timestamp(bar_close_t)
+            # The session of the moment we decide, not of the bar's open — a
+            # four-hour bar can open in one session and close in the next.
+            session = spec.session_from_timestamp(decided_at)
             atr = float(h4_ind["atr"])
 
             for direction in ("BUY", "SELL"):
@@ -284,8 +361,9 @@ def build_dataset(
                 ))
                 y.append(outcome["label"])
                 meta.append({
-                    "symbol": symbol, "t": bar_close_t, "direction": direction,
+                    "symbol": symbol, "t": decided_at, "direction": direction,
                     "reason": outcome["reason"], "bars": outcome["bars"],
+                    "entry_price": outcome["entry_price"],
                     "regime": regime, "session": session,
                 })
 
@@ -324,8 +402,35 @@ def check_provenance(directory: str) -> Dict[str, Any]:
 # Validation
 # ---------------------------------------------------------------------------
 
+def validate_candles(candles_by_symbol: Dict[str, Dict[str, List]]) -> Dict[str, Any]:
+    """Structural checks on the raw series, before a single row is built.
+
+    A dataset built on an unsorted, duplicated or off-grid series is wrong in
+    ways that no downstream check will notice: `closed_slice` assumes ascending
+    timestamps, and an off-grid series usually means a broker offset that
+    shifts every alignment by a constant nobody accounted for.
+    """
+    report: Dict[str, Any] = {"per_series": {}, "blockers": []}
+    for symbol, tf_map in candles_by_symbol.items():
+        for timeframe, series in tf_map.items():
+            issues = ta.validate_series(series, timeframe)
+            report["per_series"][f"{symbol}_{timeframe}"] = issues
+            for key in ("unsorted", "duplicate_timestamps", "bad_ohlc", "non_finite"):
+                if issues[key]:
+                    report["blockers"].append(
+                        f"{symbol} {timeframe}: {issues[key]} {key}")
+            if issues["misaligned_to_grid"]:
+                report["blockers"].append(
+                    f"{symbol} {timeframe}: {issues['misaligned_to_grid']} candles "
+                    f"are not on the {timeframe} grid — check the broker's "
+                    f"timezone offset before trusting any alignment")
+    return report
+
+
 def validate_dataset(X, y, meta) -> Dict[str, Any]:
     """Everything that should be inspected before a single tree is grown."""
+    import numpy as np
+
     report: Dict[str, Any] = {}
     n = len(X)
     report["rows"] = n
@@ -409,23 +514,65 @@ def validate_dataset(X, y, meta) -> Dict[str, Any]:
 
     # Direct leakage probe: no feature may be an near-perfect classifier on its
     # own. If one is, an outcome-derived value has reached the feature vector.
+    # Tie-corrected, and it has to be. The obvious ordinal-rank version —
+    # `sorted(zip(col, y))` then summing positions — breaks ties by the second
+    # tuple element, so within every tied group the y=1 rows sort last and
+    # collect the highest ranks. On a column with few distinct values that
+    # manufactures a near-perfect classifier out of nothing: measured here,
+    # `volatility_score` scored 0.9068 that way against a true 0.5088, and
+    # `market_regime` 0.9083 against 0.5014. Continuous columns like `rsi` were
+    # unaffected (0.5085 either way), which is why the error stayed invisible
+    # until this probe became a blocker — it fires only on the encoded
+    # categoricals, and it fires on all of them.
     single_feature_auc = {}
-    for idx, name in enumerate(spec.FEATURE_NAMES):
-        col = [row[idx] for row in X]
-        if len(set(col)) == 1:
-            continue
-        pairs = sorted(zip(col, y))
-        pos = sum(1 for _, v in pairs if v == 1.0)
-        neg = len(pairs) - pos
-        if not pos or not neg:
-            continue
-        rank_sum = sum(i + 1 for i, (_, v) in enumerate(pairs) if v == 1.0)
-        auc = (rank_sum - pos * (pos + 1) / 2) / (pos * neg)
-        single_feature_auc[name] = round(max(auc, 1 - auc), 4)
+    y_arr = np.asarray(y, dtype=float)
+    pos = int(y_arr.sum())
+    neg = len(y_arr) - pos
+    if pos and neg:
+        for idx, name in enumerate(spec.FEATURE_NAMES):
+            col = np.asarray([row[idx] for row in X], dtype=float)
+            if len(np.unique(col)) == 1:
+                continue
+            auc = _auc_with_ties(y_arr, col, pos, neg)
+            single_feature_auc[name] = round(max(auc, 1 - auc), 4)
     report["single_feature_auc"] = single_feature_auc
     report["leaky_features"] = [
         n for n, a in single_feature_auc.items() if a >= 0.90
     ]
+
+    # Chronology. Rows are consumed in time order by the walk-forward split, so
+    # a series that is not monotonic per symbol would silently train on the
+    # future in some folds.
+    out_of_order = 0
+    last_seen: Dict[str, float] = {}
+    for m in meta:
+        previous = last_seen.get(m["symbol"])
+        if previous is not None and m["t"] < previous:
+            out_of_order += 1
+        last_seen[m["symbol"]] = m["t"]
+    report["out_of_order_rows"] = out_of_order
+
+    # One decision timestamp may produce at most one row per direction. More
+    # than that means the same bar was labelled twice.
+    keys = Counter((m["symbol"], m["t"], m["direction"]) for m in meta)
+    report["duplicate_decisions"] = sum(v - 1 for v in keys.values() if v > 1)
+
+    # Entry prices must be real, positive and finite. The previous pipeline's
+    # entry price was a 50-period average, which is finite and positive too —
+    # so also check it is not implausibly far from the ATR-scaled barriers,
+    # which is what an averaged price looks like.
+    impossible = 0
+    for m in meta:
+        price = m.get("entry_price")
+        if price is None or not isinstance(price, float) or price <= 0 \
+                or math.isnan(price) or math.isinf(price):
+            impossible += 1
+    report["impossible_entry_prices"] = impossible
+
+    report["symbols"] = len(per_symbol)
+    smallest = min((v["n"] for v in per_symbol.values()), default=0)
+    largest = max((v["n"] for v in per_symbol.values()), default=0)
+    report["symbol_balance_ratio"] = round(smallest / largest, 4) if largest else 0.0
 
     by_dir = defaultdict(lambda: [0, 0])
     for row_y, m in zip(y, meta):
@@ -775,12 +922,24 @@ def main() -> int:
         print(f"  chosen horizon = {horizon} H4 bars")
         print(f"  resolution curve: {horizon_stats.get('resolution_curve')}")
 
+    print("\nValidating raw candle series...")
+    candle_report = validate_candles(candles_by_symbol)
+    for name, issues in candle_report["per_series"].items():
+        print(f"  {name}: {issues['count']} bars, {issues['gaps']} gaps "
+              f"(largest {issues['largest_gap_bars']} bars)")
+    if candle_report["blockers"]:
+        print("\nCANDLES REJECTED:")
+        for blocker in candle_report["blockers"]:
+            print("  - " + str(blocker))
+        return 1
+
     print("\nBuilding dataset...")
     X, y, meta = build_dataset(candles_by_symbol, horizon)
     print(f"  {len(X)} rows")
 
     print("\nValidating dataset...")
     validation = validate_dataset(X, y, meta)
+    validation["candles"] = candle_report
     print(json.dumps({k: validation[k] for k in
                       ("rows", "overall", "per_symbol", "label_reasons",
                        "direction_split", "constant_features", "duplicate_pct",
@@ -803,6 +962,21 @@ def main() -> int:
         blockers.append(f"unexpected constant features: {sorted(unexpected_constants)}")
     if validation.get("leakage_suspects"):
         blockers.append(f"possible leakage: {validation['leakage_suspects']}")
+    if validation.get("leaky_features"):
+        blockers.append(
+            f"single features classifying almost perfectly (AUC>=0.90): "
+            f"{validation['leaky_features']} — an outcome-derived value has "
+            f"reached the feature vector")
+    if validation.get("out_of_order_rows"):
+        blockers.append(f"{validation['out_of_order_rows']} rows out of chronological order")
+    if validation.get("duplicate_decisions"):
+        blockers.append(f"{validation['duplicate_decisions']} duplicate (symbol, time, direction) rows")
+    if validation.get("impossible_entry_prices"):
+        blockers.append(f"{validation['impossible_entry_prices']} impossible entry prices")
+    if validation.get("symbol_balance_ratio", 1.0) < 0.2:
+        blockers.append(
+            f"symbol imbalance: smallest/largest = "
+            f"{validation['symbol_balance_ratio']} — one instrument would dominate")
 
     if blockers:
         print("\nDATASET REJECTED:")
@@ -880,16 +1054,52 @@ def main() -> int:
         print(json.dumps({"walk_forward": wf, "checks": checks}, indent=2))
         return 0
 
-    if os.path.exists(MODEL_PATH):
-        os.makedirs(BACKUP_DIR, exist_ok=True)
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        backup = os.path.join(BACKUP_DIR, f"entry_model_before_{stamp}.json")
-        shutil.copy2(MODEL_PATH, backup)
-        print(f"\nBacked up previous model -> {backup}")
-        report["previous_model_backup"] = backup
+    # Promotion goes through the guard, which is the only sanctioned writer to
+    # the production artifact. It re-checks the candidate against its metadata
+    # and against the live feature contract, backs up what it replaces, and
+    # requires KAIROS_ALLOW_MODEL_INSTALL=1 — so a training run can never
+    # replace the served model as a side effect of finishing.
+    from analysis.models import entry_model_metadata as md
+    from analysis.models import production_model_guard as guard
 
-    shutil.move(staged, MODEL_PATH)
-    print(f"Installed -> {MODEL_PATH}")
+    times = sorted(m["t"] for m in meta)
+    span = (datetime.fromtimestamp(times[0], tz=timezone.utc).isoformat(),
+            datetime.fromtimestamp(times[-1], tz=timezone.utc).isoformat())
+    metadata_payload = md.build(
+        model_version=f"entry-{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}",
+        training_pipeline_id="scripts/train_entry_model.py",
+        feature_names=list(spec.FEATURE_NAMES),
+        dataset_fingerprint=dataset_fingerprint(X, y, meta),
+        # The final model is fit on the whole span; the walk-forward folds are
+        # what the promotion decision was actually made on, and they are
+        # recorded in the report next to these dates.
+        training_start=span[0], training_end=span[1],
+        validation_start=span[0], validation_end=span[1],
+        test_start=span[0], test_end=span[1],
+        symbol_scope=symbols,
+        timeframe_scope=["H4", "H1"],
+        target_definition=(
+            f"first touch of TP {ATR_TP_BASE_MULTIPLIER}xATR before SL "
+            f"{ATR_SL_BASE_MULTIPLIER}xATR within {horizon} H4 bars; "
+            f"both touched in one bar counts as a loss"),
+        target_horizon=horizon,
+        git_commit=git_commit(),
+        extra={"walk_forward_mean_roc_auc": wf.get("mean_roc_auc")},
+    )
+    report["model_metadata"] = metadata_payload
+
+    try:
+        installed = guard.install(staged, metadata_payload)
+    except guard.ModelInstallRefused as exc:
+        os.remove(staged)
+        print(f"\nNOT INSTALLED: {exc}")
+        report["install_refused"] = str(exc)
+        _write_report(report)
+        return 1
+
+    os.remove(staged) if os.path.exists(staged) else None
+    print(f"Installed -> {installed['path']} sha256={installed['sha256']}")
+    report["previous_model_backup"] = installed["backup"]
 
     print("\nLive inference check...")
     live = live_inference_check()
@@ -902,9 +1112,7 @@ def main() -> int:
     )
     direction_ok = all(v["direction_changes_p_win"] for v in live.values())
 
-    with open(REPORT_PATH, "w", encoding="utf-8") as fh:
-        json.dump(report, fh, indent=2, ensure_ascii=False)
-    print(f"\nReport -> {REPORT_PATH}")
+    _write_report(report)
 
     if not gate_ok:
         print("\nWARNING: ML gate did not return OK for every case. Investigate "
