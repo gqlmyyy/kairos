@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from analysis.features import entry_features as ef  # noqa: E402
+from analysis.features import timeframe_alignment as ta  # noqa: E402
 
 import train_entry_model as trainer  # noqa: E402
 
@@ -70,16 +71,17 @@ def build_rows(candles_by_symbol, sl_mult, tp_mult, horizon):
     try:
         for symbol, tf in candles_by_symbol.items():
             h4, h1 = tf["H4"], tf["H1"]
-            h1_times = [c["t"] for c in h1]
 
             for i in range(ef.MIN_BARS, len(h4) - horizon - 1):
-                bar_t = h4[i]["t"]
-                pos = bisect.bisect_right(h1_times, bar_t)
-                if pos < ef.MIN_BARS:
+                # Decision happens when the H4 bar closes, not when it opens.
+                bar_t = ta.decision_time(h4, i, "H4")
+                h4_visible = ta.closed_slice(h4, "H4", bar_t)
+                h1_visible = ta.closed_slice(h1, "H1", bar_t)
+                if len(h4_visible) < ef.MIN_BARS or len(h1_visible) < ef.MIN_BARS:
                     continue
 
                 from analysis.features import live_parity_features as lpf
-                h4_ind = lpf.live_indicators(h4[: i + 1])
+                h4_ind = lpf.live_indicators(h4_visible)
                 if h4_ind is None:
                     continue
                 atr = float(h4_ind["atr"])
@@ -89,7 +91,7 @@ def build_rows(candles_by_symbol, sl_mult, tp_mult, horizon):
                     if outcome is None:
                         continue
                     named = ef.build_entry_features(
-                        h4[: i + 1], h1[:pos],
+                        h4_visible, h1_visible,
                         direction=direction, timestamp=bar_t)
                     if named is None:
                         continue
