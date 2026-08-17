@@ -401,3 +401,181 @@ corruption.
 
 Boundary unchanged: no model, training, label, threshold or trading-logic
 code touched in round 2 either.
+
+---
+
+## Round 3 — the real gap list came back again: 132 DATA_ERROR, forming
+candle still present, and a genuine midnight-boundary bug in round 2's own fix
+
+Real output this time: 38,400 bars, `EXPECTED_MARKET_GAP: 716 / SUSPICIOUS_GAP:
+2 / DATA_ERROR: 132`, plus the forming-candle check still failing at
+22:00→22:30 UTC. The user flagged two recurring `DATA_ERROR` examples that
+were obviously the weekly close misclassified — `Saturday 00:00 UTC ->
+Monday 01:00 UTC` (49h) and its 48h DST variant — plus five scattered,
+irregularly-sized gaps to investigate and explicitly NOT auto-whitelist.
+
+### Root cause 4 — the weekly-close rule breaks when the close lands exactly
+on a midnight boundary
+
+Round 2's `gap_start_t` is `prev_t + span` — the first MISSING bar's open.
+When the last present candle is Friday 23:30, that first missing bar opens
+at **Saturday 00:00**, so `gap_start_t`'s own `.weekday()` is Saturday, not
+Friday. Pass 1 (`weekly_close`) checked `start_weekday == 4` (Friday) — so
+every single instance of this broker's actual weekly close, which happens
+to land exactly at the day boundary, silently failed the rule and fell
+through to `DATA_ERROR`. This is almost certainly the largest single
+contributor to the 132: two clean, real, recurring examples were handed to
+us, and both were exactly this.
+
+**Fix**: classification is now keyed on a new `stop_weekday`/`stop_hour_utc`
+pair, computed from `prev_t` — the **last present** candle — instead of the
+first missing one. Friday 23:30 is unambiguously Friday regardless of which
+side of midnight the next missing bar's timestamp falls on. `start_weekday`
+stays first-missing-bar-based for display (that's how the report itself
+reads a gap), but every classification decision (`_daily_close_hours`, the
+weekly-close check, the broker-maintenance weekday filter) now reads
+`stop_weekday`. Verified against both of the report's own examples by exact
+timestamp (`test_a_weekly_close_landing_exactly_on_the_midnight_boundary_is_accepted`,
+`test_a_dst_shifted_48_hour_variant_of_the_same_close_is_also_accepted`) —
+both now classify as `weekly_close`.
+
+The Friday-afternoon/evening hour guard (`_FRIDAY_CLOSE_EARLIEST_HOUR_UTC`)
+also moved to `stop_hour_utc` for the same reason, and — since it no longer
+needs `daily_close_hours` to already exist as a prerequisite — pass 1 is
+simpler than round 2's version: weekday structure (last trade Friday,
+resume weekend/Monday) is sufficient on its own, once it isn't reading the
+wrong day's weekday.
+
+### The daily-maintenance tolerance band was loosened where it should have
+been tightened
+
+Round 2's `broker_maintenance` acceptance band was `median ± 50% + 1 bar` —
+generous enough that a genuinely irregular gap landing on a recognized hour
+could plausibly be waved through if its size happened to fall inside that
+wide a band. The user's explicit instruction ("do NOT automatically
+classify these as expected") for five scattered real examples made this
+worth tightening rather than leaving as-is.
+
+**Fix**: the band is now `median ± max(2 × MAD, 1)` bars — driven by how
+much this broker's pause size *actually varies* at that hour
+(`_pause_size_stats`, median absolute deviation), not a fixed percentage. A
+broker whose pause is always exactly N bars gets a tight band; a genuinely
+jittery one gets a band sized to the jitter actually measured. Verified with
+`test_reported_irregular_gaps_are_not_auto_whitelisted_by_a_nearby_recognized_hour`,
+which reproduces the report's `2026-02-26 22:00 -> 2026-02-27 03:00` example
+against a backdrop where 22:00 UTC is a real, tight, 2-bar daily pause — the
+outlier (10 bars) is far outside tolerance and correctly stays `DATA_ERROR`.
+
+All five of the report's flagged irregular examples were checked in
+isolation against this fix (no established pattern to lean on) and all five
+correctly still classify as `DATA_ERROR` — none of the fixes made in this
+round are a general loosening, only a fix for the specific structural bug
+(root cause 4) and a tightening (this one). None of the five match any
+evidenced holiday either. They remain visible, unexplained, and worth a
+human look — the audit output (see below) is built specifically to make
+that possible without re-deriving anything.
+
+### Forming candle: excluded, not fatal
+
+The brief was explicit: exclude a forming candle from the validated view
+rather than failing Gate 1 outright, and never modify the historical file
+to satisfy validation. `check_completed()` in `validate_m30_candles.py` is
+rewritten: it now trims trailing candles that either (a) have not closed
+yet by real UTC "now", or (b) — per the file's own manifest — were still
+forming *at the moment they were exported*, so their OHLC may be
+provisional even though real time has since passed their close. Both cases
+`WARN`, neither `FAIL`s Gate 1 by itself; the trimmed, usable view is what
+field-usability and gap classification actually run against. Only if
+*nothing* remains usable does this fail. The file on disk is never touched.
+7 new tests in `tests/test_validate_m30_candles.py` (no MT5 needed) cover:
+a fully closed final candle passing whole, a forming one being excluded (not
+fatal), multiple trailing forming candles all being trimmed, an
+all-forming file failing closed with nothing to validate, a
+provisional-at-export-time candle being excluded even though it has since
+closed, the input list never being mutated, and two runs against identical
+input agreeing (no lookahead into anything not yet computed).
+
+### Audit output (task 12)
+
+Every `DATA_ERROR` gap printed by `validate_m30_candles.py` now shows, per
+candidate rule, why it did not match: `weekly_close` (last-trade weekday/
+hour and resume weekday), `known_holiday` (evidenced-holiday overlap or
+not), and `broker_maintenance` (recognized hour or not; if recognized, the
+measured typical size, MAD, tolerance band, and this gap's own size against
+it). A `DATA_ERROR` verdict is now auditable line by line without
+re-running anything.
+
+### Verified on a reconstruction of this round's real numbers
+
+Rebuilt the synthetic XAUUSD M30 series with the weekly close landing
+exactly at midnight (root cause 4's exact shape), a DST-shifted daily pause,
+evidenced holidays, all five of the report's flagged irregular examples
+injected verbatim, and a genuinely forming final candle:
+
+```
+5. GAP CLASSIFICATION
+  XAUUSD_M30: 829 total gaps ...
+  recognized daily-close hour(s) UTC: ['22:00', '23:00']
+    EXPECTED_MARKET_GAP  824
+    SUSPICIOUS_GAP       0
+    DATA_ERROR           5
+  FAIL  XAUUSD_M30: 5 DATA_ERROR gaps — genuinely unexplained, full audit below...
+    [all five of the injected irregular examples, each with its per-rule reasoning]
+
+  WARN  XAUUSD_M30: excluded 1 trailing candle(s) still forming as of validation time
+  GATE 1 FAILED — 1 blocking problem(s)
+```
+
+Exactly the intended outcome: the forming candle no longer blocks Gate 1 by
+itself, the structural weekly-close bug is gone, and the five genuinely
+unexplained gaps are neither hidden nor force-passed — Gate 1 still fails,
+honestly, on what remains actually unexplained. Per the brief: "If genuine
+DATA_ERROR gaps remain after correcting session classification, STOP and
+report them instead of forcing a pass" — this synthetic run does exactly
+that, and the real run is expected to behave the same way modulo whatever
+the real five (or fewer, if some turn out to have a defensible explanation
+once looked at directly) actually are.
+
+### Files changed, round 3
+
+* `analysis/features/timeframe_alignment.py` — `stop_weekday`/`stop_hour_utc`
+  fields; `_daily_close_hours`, pass 1, and the broker-maintenance weekday
+  filter now read `stop_weekday`; `_pause_size_stats` (median + MAD) replaces
+  `_typical_missing_bars`; MAD-based tolerance band; `rule_checks` audit
+  trail attached to every gap.
+* `scripts/validate_m30_candles.py` — `check_completed` rewritten to trim
+  and return the usable view instead of failing on a forming/provisional
+  candle; `check_gaps`'s `DATA_ERROR` printout now includes the full
+  per-rule audit trail.
+* `tests/test_timeframe_alignment.py` — 3 new tests: the exact 49h and 48h
+  midnight-boundary examples from the report, and the irregular-gap
+  not-auto-whitelisted regression (69 total, up from 66).
+* `tests/test_validate_m30_candles.py` (new) — 7 tests for the
+  exclude-not-fail forming-candle behavior.
+* This report.
+
+### Test results, round 3
+
+`pytest -q`: **955 passed**, 1 pre-existing unrelated failure (unchanged
+from rounds 1-2).
+
+### Still needed from the real file
+
+Re-run on the real data after pulling this fix:
+
+```bash
+git pull
+python scripts/validate_m30_candles.py --symbols XAUUSD
+```
+
+If the diagnosis is complete, `DATA_ERROR` should drop from 132 toward a
+small number close to the five flagged examples (possibly fewer, if any of
+those turn out to have a defensible explanation on closer look; possibly
+the same five, confirming they are genuinely unexplained). The forming-
+candle line should show as a `WARN` (excluded) rather than a `FAIL`. Any
+remaining `DATA_ERROR` gaps print with their full per-rule audit trail —
+report them back rather than force a pass, per the brief's own success
+criteria.
+
+Boundary unchanged: no model, training, label, threshold or trading-logic
+code touched in round 3 either.

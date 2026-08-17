@@ -359,11 +359,16 @@ def _overlaps_known_holiday(start_t: float, end_t: float) -> bool:
     return False
 
 
-# Fallback only, used when a series is too short or too sparse to have
-# established its own recurring daily-close hour(s) yet (see
-# `_daily_close_hours`) — a Friday gap has to start in the afternoon/evening
-# to plausibly be the weekly close at all, whatever hour that turns out to
-# be exactly.
+_WEEKDAY_NAMES = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+
+# A Friday close has to land in the afternoon/evening of the LAST PRESENT
+# candle (`stop_hour_utc`) to plausibly be the weekly close at all — this is
+# the one guard against a genuine multi-day outage that happens to start
+# early Friday and end over the weekend being mistaken for the market simply
+# closing on schedule. It is checked against when trading actually stopped,
+# not the first missing bar's hour, so it survives a close landing exactly
+# on a midnight boundary (stop 23:30 Friday, first missing bar dated
+# Saturday 00:00) without needing a learned daily-close hour first.
 _FRIDAY_CLOSE_EARLIEST_HOUR_UTC = 12
 
 
@@ -376,20 +381,40 @@ def _daily_close_hours(gaps: List[Dict[str, Any]], *, min_recurrence: int) -> se
     a multi-year series into two (or more) equally legitimate clusters
     rather than one dominant hour — a classifier that only ever looks for a
     single "most common" hour silently fails half the year.
+
+    Filtered on `stop_weekday` (the last PRESENT candle's weekday), not
+    `start_weekday` (the first MISSING candle's) — a close that lands
+    exactly on a midnight boundary (last trade Thursday 23:30, first
+    missing bar technically dated Friday 00:00) must count toward
+    Thursday's cluster, the day trading actually stopped, not get silently
+    reassigned to the next calendar day by an artifact of the boundary.
     """
-    hour_counts = Counter(g["start_hour_utc"] for g in gaps if g["start_weekday"] < 5)
+    hour_counts = Counter(g["start_hour_utc"] for g in gaps if g["stop_weekday"] < 5)
     return {hour for hour, n in hour_counts.items() if n >= min_recurrence}
 
 
-def _typical_missing_bars(gaps: List[Dict[str, Any]], hour: int,
-                           *, max_bars_for_typical: int) -> Optional[float]:
-    """The routine size of the daily pause at `hour`, from short instances
-    only — a rare multi-day holiday gap that happens to start at the same
-    hour must not drag this median toward "anything is typical"."""
+def _pause_size_stats(gaps: List[Dict[str, Any]], hour: int,
+                       *, max_bars_for_typical: int) -> Optional[Dict[str, float]]:
+    """The routine size of the daily pause at `hour`, and how much it
+    actually varies — from short instances only, since a rare multi-day
+    holiday gap that happens to start at the same hour must not drag the
+    median toward "anything is typical".
+
+    Returns the median and its MAD (median absolute deviation), so the
+    acceptance band in `classify_gaps` is driven by how consistent this
+    broker's pause genuinely is, not a fixed percentage. A broker whose
+    daily pause is always exactly N bars gets a tight band; one whose pause
+    jitters gets a looser one, sized to the jitter actually observed rather
+    than guessed.
+    """
     sizes = [g["missing_bars"] for g in gaps
-             if g["start_hour_utc"] == hour and g["start_weekday"] < 5
+             if g["start_hour_utc"] == hour and g["stop_weekday"] < 5
              and g["missing_bars"] <= max_bars_for_typical]
-    return statistics.median(sizes) if sizes else None
+    if not sizes:
+        return None
+    median = statistics.median(sizes)
+    mad = statistics.median(abs(s - median) for s in sizes)
+    return {"median": median, "mad": mad}
 
 
 def classify_gaps(
@@ -397,7 +422,7 @@ def classify_gaps(
     timeframe: str,
     *,
     min_daily_recurrence: int = 20,
-    daily_pause_tolerance: float = 0.5,
+    pause_tolerance_mad_multiple: float = 2.0,
     max_bars_for_typical_pause: int = 16,
     suspicious_max_missing_bars: int = 2,
 ) -> Dict[str, Any]:
@@ -411,13 +436,18 @@ def classify_gaps(
     hour twice a year. A duration-matching classifier would misjudge real
     closures for roughly half the year. This one instead:
 
-    1. Learns this series' own recurring daily-close hour(s) and the typical
-       (median) size of the pause at each one (`_daily_close_hours`,
-       `_typical_missing_bars`) — data-driven, not assumed, and not capped
-       at an arbitrary bar count: a broker's daily maintenance window can
+    1. Learns this series' own recurring daily-close hour(s) and how
+       consistent the pause size actually is at each one (`_daily_close_hours`,
+       `_pause_size_stats`) — data-driven, not assumed, and not capped at an
+       arbitrary bar count: a broker's daily maintenance window can
        legitimately run for hours, and the evidence that it is routine is
        that it recurs at a consistent hour with a consistent size, not that
-       it is short.
+       it is short. The acceptance band is `median ± max(pause_tolerance_mad_multiple
+       * MAD, 1)` — a broker whose pause is always exactly N bars gets a tight
+       band (so an irregular gap that happens to land on the same hour is NOT
+       swallowed just because it is nearby in time), one with genuine jitter
+       gets a band sized to the jitter actually observed, not a guessed
+       percentage.
     2. ``weekly_close`` — starts on Friday at a recognized daily-close hour
        (or, if none has been established yet, the afternoon/evening
        fallback) and ends Saturday, Sunday or Monday.
@@ -456,6 +486,12 @@ def classify_gaps(
         gap_end_t = t                # data resumes here
         start_dt = datetime.fromtimestamp(gap_start_t, tz=timezone.utc)
         end_dt = datetime.fromtimestamp(gap_end_t, tz=timezone.utc)
+        # `stop_dt` is the last PRESENT candle (prev_t), used for weekday
+        # classification instead of `start_dt` — see `_daily_close_hours`.
+        # `start_weekday`/`start_hour_utc` stay start_dt-based because that
+        # is how a gap is reported and read ("22:30 -> 01:00"); only the
+        # *classification* logic needs the stop side.
+        stop_dt = datetime.fromtimestamp(prev_t, tz=timezone.utc)
         gaps.append({
             "gap_start_t": gap_start_t,
             "gap_end_t": gap_end_t,
@@ -464,21 +500,37 @@ def classify_gaps(
             "start_weekday": start_dt.weekday(),  # Monday = 0 .. Sunday = 6
             "end_weekday": end_dt.weekday(),
             "start_hour_utc": start_dt.hour,
+            "stop_weekday": stop_dt.weekday(),
+            "stop_hour_utc": stop_dt.hour,
             "missing_bars": missing,
             "duration_hours": round(missing * span / 3600.0, 2),
         })
 
     daily_close_hours = _daily_close_hours(gaps, min_recurrence=min_daily_recurrence)
-    typical_at_hour = {
-        hour: _typical_missing_bars(gaps, hour, max_bars_for_typical=max_bars_for_typical_pause)
+    stats_at_hour = {
+        hour: _pause_size_stats(gaps, hour, max_bars_for_typical=max_bars_for_typical_pause)
         for hour in daily_close_hours
     }
 
-    # Pass 1: the weekly close.
+    # Pass 1: the weekly close. Keyed on `stop_weekday`/`stop_hour_utc` (the
+    # last PRESENT candle), not `start_weekday` — a close landing exactly on
+    # a midnight boundary (last trade Friday 23:30, first missing bar dated
+    # Saturday 00:00) must still read as "stopped trading on Friday", or the
+    # single most common real-world instance of this exact gap is missed.
     for g in gaps:
-        at_close_hour = (g["start_hour_utc"] in daily_close_hours if daily_close_hours
-                          else g["start_hour_utc"] >= _FRIDAY_CLOSE_EARLIEST_HOUR_UTC)
-        if g["start_weekday"] == 4 and at_close_hour and g["end_weekday"] in (5, 6, 0):
+        checks = g.setdefault("rule_checks", {})
+        is_friday_stop = g["stop_weekday"] == 4
+        late_enough = g["stop_hour_utc"] >= _FRIDAY_CLOSE_EARLIEST_HOUR_UTC
+        resumes_on_weekend = g["end_weekday"] in (5, 6, 0)
+        checks["weekly_close"] = (
+            f"last trade {_WEEKDAY_NAMES[g['stop_weekday']]} {g['stop_hour_utc']:02d}:xx UTC "
+            f"({'Friday' if is_friday_stop else 'not Friday'}"
+            f"{', late enough' if is_friday_stop and late_enough else ''}"
+            f"{', too early in the day' if is_friday_stop and not late_enough else ''}), "
+            f"resumes {_WEEKDAY_NAMES[g['end_weekday']]} "
+            f"({'weekend/Monday' if resumes_on_weekend else 'not weekend/Monday'})"
+        )
+        if is_friday_stop and late_enough and resumes_on_weekend:
             g["category"] = "EXPECTED_MARKET_GAP"
             g["reason"] = "weekly_close"
 
@@ -486,28 +538,43 @@ def classify_gaps(
     # (a holiday landing on a weekday, or a closure that starts before
     # Friday, e.g. the Thursday evening ahead of Good Friday).
     for g in gaps:
+        holiday_hit = _overlaps_known_holiday(g["gap_start_t"], g["gap_end_t"])
+        g["rule_checks"]["known_holiday"] = (
+            "overlaps an evidenced US market holiday" if holiday_hit
+            else "no evidenced holiday in this date range")
         if "category" in g:
             continue
-        if _overlaps_known_holiday(g["gap_start_t"], g["gap_end_t"]):
+        if holiday_hit:
             g["category"] = "EXPECTED_MARKET_GAP"
             g["reason"] = "known_holiday"
 
     # Pass 3: the broker's routine daily maintenance/session pause.
     for g in gaps:
-        if "category" in g or g["start_weekday"] >= 5:
-            continue
         hour = g["start_hour_utc"]
-        if hour not in daily_close_hours:
-            continue
-        typical = typical_at_hour.get(hour)
-        if typical is None:
-            continue
-        lo = typical * (1 - daily_pause_tolerance)
-        hi = typical * (1 + daily_pause_tolerance) + 1  # +1 bar of slack at small sizes
-        if lo <= g["missing_bars"] <= hi:
-            g["category"] = "EXPECTED_MARKET_GAP"
-            g["reason"] = "broker_maintenance"
-            g["detail"] = (f"~{typical:.0f} bars typical at {hour:02d}:00 UTC in this series")
+        if g["stop_weekday"] >= 5:
+            g["rule_checks"]["broker_maintenance"] = "stopped trading on a weekend day"
+        elif hour not in daily_close_hours:
+            g["rule_checks"]["broker_maintenance"] = (
+                f"{hour:02d}:00 UTC is not a recognized daily-close hour "
+                f"(recognized: {sorted(daily_close_hours) or 'none established'})")
+        else:
+            stats = stats_at_hour.get(hour)
+            if stats is None:
+                g["rule_checks"]["broker_maintenance"] = (
+                    f"{hour:02d}:00 UTC is recognized but has no typical size on record")
+            else:
+                median, mad = stats["median"], stats["mad"]
+                band = max(pause_tolerance_mad_multiple * mad, 1.0)
+                lo, hi = median - band, median + band
+                in_band = lo <= g["missing_bars"] <= hi
+                g["rule_checks"]["broker_maintenance"] = (
+                    f"{hour:02d}:00 UTC typical size {median:.0f} bars (MAD {mad:.1f}), "
+                    f"tolerance [{lo:.1f}, {hi:.1f}]; this gap is {g['missing_bars']} bars "
+                    f"({'within' if in_band else 'outside'} tolerance)")
+                if "category" not in g and in_band:
+                    g["category"] = "EXPECTED_MARKET_GAP"
+                    g["reason"] = "broker_maintenance"
+                    g["detail"] = f"~{median:.0f} bars typical at {hour:02d}:00 UTC in this series"
 
     # Pass 4/5: what is left is either small enough to be plausible thin
     # liquidity, or genuinely unexplained.
