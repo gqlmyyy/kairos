@@ -722,3 +722,138 @@ evidence-based explanation," not "Gate 1 passes at any cost."
 Boundary unchanged: no model, training, label, threshold or trading-logic
 code touched in round 4. Nothing was re-fetched (no MT5 access here to do
 it with), and no historical file was modified.
+
+---
+
+## Round 5 — the audit tool was actually run, and it had a real bug: fixed
+
+The user ran round 4's `scripts/audit_xauusd_m30_gaps.py` against the real
+MetaTrader5 Python package (**5.0.5735**, terminal build **6116**). Two
+things came back:
+
+1. `mt5.symbol_info_session_trade` — **does not exist in this package
+   version**. The round-4 script called it, caught the resulting
+   `AttributeError`, and (a real bug) treated that catch as if it were
+   informative, weakly reporting `CALENDAR_RULE_MISMATCH` for all five gaps
+   on that basis alone. That conclusion was never actually earned by
+   evidence.
+2. With that call removed, the already-established facts stand:
+   `M30 bars in gap = 0` and `M1 bars = 0` for all five gaps, and the
+   historical file also has zero bars in each — so there is still no
+   evidence of a fetch-pipeline failure, but there was also no legitimate
+   basis yet for calling these closures either.
+
+### The fix — remove the invented API, add real evidence sources instead
+
+`scripts/audit_xauusd_m30_gaps.py` was rewritten (this is now the only file
+changed, per this round's explicit instruction — `validate_m30_candles.py`,
+`classify_gaps()`, the historical file, and training code are all
+untouched):
+
+* **No hard-coded session API.** `detect_session_api(mt5)` inspects
+  `dir(mt5)` at runtime for anything with "session" in its name — on
+  5.0.5735 that is an empty list, reported honestly as
+  `SESSION_METADATA_UNAVAILABLE`, never silently promoted to "market was
+  closed." If a future package version exposes something under a different
+  name, this picks it up automatically and calls it defensively, but does
+  **not** auto-interpret its return value as proof of anything — no named,
+  reviewed interpreter exists for an API this script has never seen
+  documented behavior for, so `confirms_closed` stays `None` even when a
+  session-named attribute is found and called successfully. A regression
+  test (`test_broker_session_gap_is_unreachable_without_an_interpreted_confirmation`)
+  proves `BROKER_SESSION_GAP` cannot be manufactured from an unknown API's
+  raw output.
+* **Explicit, self-contained MT5 connection.** `connect_mt5()` calls
+  `mt5.initialize()` → `terminal_info()` → `symbol_info()` (with
+  `symbol_select()` fallback) directly — matching exactly how the user's
+  own successful manual diagnostic connected (bare `initialize()`, no
+  `login()`, attaching to the already-running, already-authenticated
+  terminal) rather than going through `mt5_session.ensure_session()`'s
+  heavier `.env`-credentialed login path. `mt5.shutdown()` runs in a
+  `finally`, so it happens even when a gap audit raises.
+* **Ticks, not just M30/M1.** `copy_ticks_range` is queried for every gap
+  (`hasattr` — checked, not assumed; a failed or unsupported query reports
+  `ERROR`/`UNSUPPORTED` explicitly and is never read as "no ticks exist").
+  Tick activity immediately before AND after a gap, combined with zero
+  ticks/M1/M30 *inside* it, is now the actual corroborating evidence for
+  `CALENDAR_RULE_MISMATCH` — proof that MT5's history coverage isn't
+  broken in that region generally, which a bare M30/M1 zero count alone
+  never established.
+* **Exact timestamp SETS, not counts.** `mt5_only` / `historical_only` are
+  now computed by diffing the actual timestamp sets MT5 and the historical
+  file return over both the full 48h window and the gap itself — the
+  brief's explicit requirement ("do not compare only counts... do not
+  classify based only on counts").
+* **Conservative classification**, in order: (1) MT5 has M30 timestamps
+  inside the gap the file lacks → `FETCH_PIPELINE_FAILURE`, HIGH; (2) the
+  file has timestamps MT5 no longer serves → `HISTORICAL_FILE_CORRUPTION`,
+  MEDIUM (explicitly caveated: MT5's local cache can itself be limited);
+  (3) both empty, and an interpreted session source confirms closure →
+  `BROKER_SESSION_GAP`, HIGH (currently unreachable on this package, by
+  design); (4) both empty, no session confirmation, but ticks corroborate
+  genuine coverage around the gap → `CALENDAR_RULE_MISMATCH`, MEDIUM; (5)
+  anything else, including a tick-query failure or missing before/after
+  tick corroboration → `UNKNOWN`, LOW. Every path is evidence-gated; none
+  of them can be reached by absence of evidence alone.
+* **Full per-gap report** in the exact format requested (MT5 connection,
+  M30, M1, TICKS, HISTORICAL FILE, SESSION EVIDENCE, EVIDENCE bullets,
+  CONCLUSION, CONFIDENCE) plus a summary table and conclusion counts, and
+  the required `READ-ONLY AUDIT` banner up front.
+
+### Tests
+
+`tests/test_audit_xauusd_m30_gaps.py` rewritten, 22 tests (up from 8), all
+mocked — no live MT5 needed, none fabricate a live conclusion. Covers
+every case the brief listed: initialization failure, symbol missing (both
+recoverable via `symbol_select` and not), the old hard-coded session call
+being structurally absent from the source (`mt5.symbol_info_session_trade`
+never appears as an attribute access), a detected-but-uninterpreted session
+API, MT5-has-bars-file-doesn't, file-has-bars-MT5-doesn't, MT5-and-
+historical-both-empty-with-no-tick-corroboration landing as `UNKNOWN` (the
+literal real-world case this round investigates), tick-query failure and
+tick-query exception both reported as `ERROR` rather than "closed", the
+tick-corroborated `CALENDAR_RULE_MISMATCH` path, the M30/M1-empty-but-
+ticks-present contradiction staying `UNKNOWN`, exact timestamp-set
+matching, and that neither `audit_one_gap` nor `connect_mt5` contain a
+file-write call anywhere in their source.
+
+### Test results, round 5
+
+`pytest -q`: **977 passed**, 1 pre-existing unrelated failure (unchanged).
+
+### What this round found — and did not find
+
+With the invented API removed, the honest state of the evidence for all
+five gaps, from the code alone, is: **insufficient to classify** — no
+tick-query result, no session data, and no timestamp-set comparison have
+been produced by an actual live run of the corrected script yet, since
+this sandbox still has no MT5 access. The round-4 `CALENDAR_RULE_MISMATCH`
+verdict for all five gaps is **retracted** — it was never properly earned.
+
+### Files changed, round 5
+
+* `scripts/audit_xauusd_m30_gaps.py` — rewritten per above. The only
+  production file touched, as instructed.
+* `tests/test_audit_xauusd_m30_gaps.py` — rewritten, 22 tests.
+* This report.
+
+Not touched: `scripts/validate_m30_candles.py`, `classify_gaps()` or any
+other part of `analysis/features/timeframe_alignment.py`,
+`data/historical/XAUUSD_M30.json`, `fetch_training_candles.py`, any model,
+training, or feature-spec code.
+
+### Next step
+
+Run the corrected script on the Windows machine, MT5 open and logged in:
+
+```bash
+git pull
+python scripts/audit_xauusd_m30_gaps.py --symbol XAUUSD
+```
+
+Then — **only** after reading that output — decide whether
+`scripts/validate_m30_candles.py` needs a narrow, evidence-backed rule.
+Per the brief: do not change the validator or calendar rules based on
+assumptions. Share the output back either way, including if every gap
+still lands as `UNKNOWN` — that is a valid, honest result, not a failure
+of the tool.
