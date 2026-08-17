@@ -579,3 +579,146 @@ criteria.
 
 Boundary unchanged: no model, training, label, threshold or trading-logic
 code touched in round 3 either.
+
+---
+
+## Round 4 — forensic audit of the remaining 5 gaps: a tool, not a verdict
+
+Round 3's fix brought the real result to `EXPECTED_MARKET_GAP: 798 /
+SUSPICIOUS_GAP: 47 / DATA_ERROR: 5` — the same five gaps flagged as
+"do not auto-classify" all along. This round is explicitly forensic: find
+the *actual* root cause of each of the five, using real evidence, not
+another calendar heuristic.
+
+**This sandbox has no MT5 terminal and no broker connection.** Every
+finding below that requires live MT5 data — Steps 2, 3, 4, 6, 7's "against
+real data" — cannot be produced from here. What follows is (a) a code-level
+audit of the fetch pipeline (Step 1, fully doable from source), and (b) a
+diagnostic tool built to Step 5's exact spec for the user to run on the
+Windows machine with MT5 running. **No calendar rule was changed in this
+round.** Per the brief's own Step 8, that only happens after real evidence
+exists — none does yet.
+
+### Step 1 — pipeline audit: a real, code-level candidate cause
+
+Traced the whole path: `fetch_training_candles.py::fetch()` → a single call
+to `mt5.copy_rates_from_pos(symbol, timeframe, 0, count + 3)` requesting
+**38,403 bars in one request** for M30 (3 years × 12,800/year) → `_closed_by`
+filters forming bars → sort → truncate to `count` → write JSON. No other
+module in this codebase (`data/market/mt5_client.py`,
+`data/market/mt5_session.py`, `data/market/historical_fetcher.py`) is on
+this path, and none of them implement chunking, pagination, or a
+completeness check either — `historical_fetcher.py` is a pre-M30 module
+capped at `limit=5000` and unrelated to this pipeline.
+
+**The finding**: there is no pagination, no retry-with-backoff, and no
+verification that the returned range is actually contiguous or complete —
+`fetch()` trusts a single `copy_rates_from_pos` call for the entire 3-year,
+38k-bar request and only checks `rates is None or len(rates) == 0`, never
+"did I get everything I asked for." This is a well-documented MT5 behavior
+class: the terminal can return a **partial, silently truncated** result for
+a deep-history request when part of that history has not yet been
+downloaded into its local cache from the broker server — with no error, no
+exception, nothing but fewer bars than expected somewhere in the middle of
+the range. Five *scattered, differently-sized, non-recurring* gaps (6, 5,
+17, 3, 10 bars) at unrelated calendar dates is a plausible signature of
+exactly this — an actual broker closure recurs on a predictable schedule;
+a local-cache gap can land anywhere the terminal happened not to have
+history for yet. This is a real, code-evidenced hypothesis
+(`FETCH_PIPELINE_FAILURE`), not a guess, but it is still a hypothesis —
+confirming it requires asking MT5 directly, which is exactly what the tool
+below does.
+
+### Step 5 — `scripts/audit_xauusd_m30_gaps.py` (new)
+
+Read-only, MT5-only (loads without it, like every other fetch script here,
+but every real check needs the Windows terminal). For each of the five
+reported gaps, independently:
+
+* queries MT5 `copy_rates_range` for **M30** over `[gap_start - 24h,
+  gap_end + 24h]` and counts bars actually inside the gap window,
+* the same for **M1** — M1 presence during an M30 hole would mean the
+  market was NOT closed, which no calendar explanation could survive,
+* queries `mt5.symbol_info_session_trade` for every day the gap touches, if
+  the broker publishes one (correctly converts Python's Monday=0 weekday
+  to MT5's Sunday=0 `day_of_week` — a silent day-off-by-one here would
+  query the wrong day's session entirely),
+* loads the exported historical file over the same window for comparison,
+
+then prints the exact report format specified in the brief, and one of
+five conclusions: `BROKER_SESSION_GAP`, `FETCH_PIPELINE_FAILURE`,
+`HISTORICAL_FILE_CORRUPTION`, `CALENDAR_RULE_MISMATCH`, `UNKNOWN` — plus a
+summary table across all five gaps at the end.
+
+**Decision logic**, in the order checked:
+
+1. MT5 has M30 bars in the gap window that the historical file is missing
+   → `FETCH_PIPELINE_FAILURE` (unambiguous: if MT5 has the data, the market
+   was not closed, and the exporter is what's responsible).
+2. The historical file has bars in the gap window that MT5 no longer
+   serves → `HISTORICAL_FILE_CORRUPTION`.
+3. MT5 has zero M30 and zero M1 bars, and a published session says the
+   market was closed → `BROKER_SESSION_GAP`.
+4. MT5 has zero M30 and zero M1 bars, but no session data confirms a
+   closure (either none published, or the broker doesn't expose the call)
+   → `CALENDAR_RULE_MISMATCH` — genuinely absent, but not yet backed by any
+   rule this codebase has.
+5. Anything else (e.g. M30 empty but M1 has bars — a real contradiction,
+   not an explanation) → `UNKNOWN`, printed with full evidence for a human
+   to read rather than silently resolved either way.
+
+### Step 7 — tests for the decision logic itself
+
+`tests/test_audit_xauusd_m30_gaps.py` (new, 8 tests, no MT5 needed) — a
+`FakeMT5` stand-in exercises all five conclusions directly: a pipeline
+failure, a broker session gap, a calendar mismatch, the M30-empty-but-M1-
+has-bars contradiction correctly landing as `UNKNOWN` rather than being
+silently resolved, file-has-bars-MT5-doesn't as corruption, plus the
+window-membership helper and the UTC-naive datetime conversion MT5's API
+needs. This proves the tool's *logic* is sound; it says nothing yet about
+which category the real five gaps actually fall into — only a real MT5 run
+can answer that.
+
+### What this round deliberately did NOT do
+
+Per the brief's Step 8 ("only then modify the validator... do NOT introduce
+a broad rule"): `classify_gaps()` was not touched, no calendar rule was
+added or removed, `[00:00, 21:00, 23:00]` (or whatever the real
+`daily_close_hours_utc` turns out to be) was not assumed correct or
+incorrect, and the five `DATA_ERROR` gaps were not reclassified. Gate 1
+remains failed on the real data, honestly, until real MT5 evidence exists.
+
+### Files changed, round 4
+
+* `scripts/audit_xauusd_m30_gaps.py` (new) — the forensic audit tool.
+* `tests/test_audit_xauusd_m30_gaps.py` (new) — 8 tests for its decision logic.
+* This report.
+
+### Test results, round 4
+
+`pytest -q`: **963 passed**, 1 pre-existing unrelated failure (unchanged).
+
+### What is needed to actually close this out
+
+Run on the Windows machine, with MT5 open and logged in:
+
+```bash
+git pull
+python scripts/audit_xauusd_m30_gaps.py --symbol XAUUSD
+```
+
+This produces, per gap, the exact evidence Steps 2/3/4/6 asked for
+(MT5 M30/M1 bar counts, published session data, historical-file comparison)
+and one of the five conclusions above, plus a summary table. Share that
+output back — it is what turns "5 unexplained gaps" into either a narrow,
+documented, evidence-backed calendar rule (Step 8, only for whichever
+gaps prove to be `BROKER_SESSION_GAP` or a defensible
+`CALENDAR_RULE_MISMATCH`), a fetch-pipeline fix and re-fetch (Step 9, for
+whichever prove `FETCH_PIPELINE_FAILURE`), or a confirmed genuine data
+problem that stays `DATA_ERROR` and keeps Gate 1 failed, per the brief's
+own explicit success criteria: "Every missing interval has a defensible,
+evidence-based explanation," not "Gate 1 passes at any cost."
+
+Boundary unchanged: no model, training, label, threshold or trading-logic
+code touched in round 4. Nothing was re-fetched (no MT5 access here to do
+it with), and no historical file was modified.
