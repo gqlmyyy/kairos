@@ -110,26 +110,7 @@ def check_provenance(directory: str, symbols) -> dict:
 # 2. Timestamp integrity, including the broker-offset diagnosis
 # ---------------------------------------------------------------------------
 
-def diagnose_grid(series, timeframe: str) -> dict:
-    """Is this series on the UTC grid, on a shifted grid, or on no grid at all?
-
-    A constant shift is a broker serving server time. The alignment arithmetic
-    survives it — `closed_slice` only ever compares timestamps to each other —
-    but `session_from_timestamp` converts to a UTC hour, so every session label
-    would be wrong by the offset. That is worth knowing precisely, which is why
-    this reports the offset rather than only counting violations.
-    """
-    span = ta.duration(timeframe)
-    offsets = Counter(int(float(c["t"]) % span) for c in series)
-    modal, modal_count = offsets.most_common(1)[0]
-    return {
-        "distinct_offsets": len(offsets),
-        "modal_offset_seconds": modal,
-        "modal_offset_hours": round(modal / 3600.0, 2),
-        "modal_share": round(modal_count / len(series), 6),
-        "on_utc_grid": modal == 0 and len(offsets) == 1,
-        "constant_offset": len(offsets) == 1,
-    }
+diagnose_grid = ta.diagnose_grid  # moved to timeframe_alignment.py so classify_gaps can share it
 
 
 def check_series(candles_by_symbol) -> dict:
