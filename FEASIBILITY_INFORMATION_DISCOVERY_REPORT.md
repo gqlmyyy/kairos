@@ -20,11 +20,13 @@ line each, no new dependency, and adds no look-ahead risk beyond what OHLC
 capture already carries — spread is a property of the closed bar, known at
 the same instant as its open/high/low/close.
 
-**Experimental results below are PENDING.** The candle files under
-`data/historical/` in the environment that produced `FEASIBILITY_REPORT.md`
-were fetched before `spread`/`real_volume` capture existed. Re-run
-`scripts/fetch_training_candles.py` (now updated) to regenerate them, then run
-`scripts/information_discovery.py` — see §15.
+**Real-data results, run 2026-08-17 (§7–13): RED.** Holdout isolation
+verified against real data first (18,353 research rows, 7,877 holdout,
+byte-identical after full holdout corruption). Neither microstructure
+(spread/volume) nor cross-asset context (DXY, US10Y, US13W, silver, oil —
+all five fetched successfully) produced a single feature beating its own
+block-permutation null. `OLD + NEW` scored worse than `OLD` alone in both
+runs. See §13b for the verdict and §15 for what remains genuinely untested.
 
 ## 2. Current RED Baseline (unchanged, carried forward)
 
@@ -90,25 +92,108 @@ ten-feature contract is unmodified.
   two real bugs were found and fixed while building this proof, both
   documented in `tests/test_holdout_isolation.py`'s docstring.
 
-## 7–13. Experimental Results
+## 7–13. Experimental Results — Real Data
 
-**PENDING** — require candle files with `spread`/`real_volume` populated,
-i.e. a fresh run of `scripts/fetch_training_candles.py` on the Windows
-machine. `scripts/information_discovery.py` reports, once run:
+Run 2026-08-17, EURUSD/GBPUSD/XAUUSD, H4+H1, same real MT5 fetch as
+`FEASIBILITY_REPORT.md` plus freshly captured spread. Holdout isolation
+**VERIFIED against this real data** first (18,353 research rows, 7,877
+holdout, byte-identical after full holdout corruption) — everything below is
+reported only because that check passed.
 
-- §7 Direction-free results (old-only / new-only / old+new, walk-forward)
-- §8 Permutation results per new feature source
-- §9 Symbol-specific results (EURUSD / GBPUSD / XAUUSD independently)
-- §10 Target audit (unchanged from Phase 4 — no new target is introduced here)
-- §11 Walk-forward results
-- §12 Stability results
-- §13 Decision gate (GREEN / YELLOW / RED)
+### §7–8 Microstructure only (spread, volume; real_volume constant on this broker)
 
-Verified end-to-end on synthetic data with injected spread/volume (pure
-noise, uncorrelated with outcomes by construction): the pipeline runs
-without error, correctly reports every new feature as failing its
-permutation test, and correctly returns RED — confirming the machinery
-behaves as designed before being pointed at real data.
+| feature | stratified \|AUC-0.5\| | MI | note |
+|---|---|---|---|
+| volume_zscore | 0.0064 | 0.000000 | best of the six, still noise |
+| spread_percentile | — | 0.003495 | |
+| spread_atr / spread_zscore | — | 0.000000 | |
+| real_volume_* | n/a | n/a | constant on this broker — confirmed, not assumed |
+
+Best stratified deviation (volume_zscore, 0.0064) sits at the **64.5th
+percentile** of its block-permutation null (median 0.0054, p95 0.0108) —
+**NO EVIDENCE**, needs ≥95th to count.
+
+```
+OLD FEATURES ONLY (direction-free)   9 features   AUC 0.5015
+NEW INFORMATION ONLY (spread/vol)    6 features   AUC 0.5002
+OLD + NEW                           15 features   AUC 0.4990   (worse than OLD alone)
+```
+
+Symbol-specific (new-info-only): EURUSD 0.5012, XAUUSD 0.5043, GBPUSD 0.4985
+— flat, none above ~0.505.
+
+### §7–8 Microstructure + cross-asset (DXY, US10Y, US13W, silver, oil)
+
+All five yfinance sources **fetched successfully** — full coverage,
+18,353/18,353 research rows.
+
+| feature | stratified \|AUC-0.5\| | MI |
+|---|---|---|
+| oil_zscore_20d | **0.0128** (highest of all 16 new features) | 0.006824 |
+| dxy_return_1d | — | **0.011983** (highest MI) |
+| us10y_return_1d | — | 0.008758 |
+| oil_return_1d | — | 0.008000 |
+| silver_return_1d | — | 0.003853 |
+| real_volume_percentile | — | 0.005980 |
+| us13w_* | — | 0.000000 |
+
+`real_volume_percentile`'s 0.005980 MI is flagged, not reported as a lead:
+this column is constant on this broker (confirmed in the microstructure-only
+run, `std=0.0000`), and sklearn's k-NN mutual-information estimator can
+return small positive noise on a near-constant column. A genuinely
+zero-information feature does not get a second reading just because a
+different feature set was evaluated alongside it.
+
+Best stratified deviation overall (oil_zscore_20d, 0.0128) sits at the
+**55.0th percentile** of its null (median 0.0118, p95 0.0215) — **NO
+EVIDENCE**.
+
+```
+OLD FEATURES ONLY (direction-free)    9 features   AUC 0.5015
+NEW INFORMATION ONLY (16 features)   16 features   AUC 0.4969
+OLD + NEW                            25 features   AUC 0.4967   (worse than OLD alone)
+```
+
+Symbol-specific (new-info-only): EURUSD 0.4935, XAUUSD 0.5035, GBPUSD 0.5014
+— flat, consistent with the microstructure-only run.
+
+### §9 Target / §10 Horizon
+
+Not re-run — this phase tests new *features* against the same target and
+horizon `FEASIBILITY_REPORT.md` already audited. Nothing here motivates
+revisiting them: no new feature comes close enough to the noise floor to
+suggest the target framing is hiding a real relationship.
+
+### §11–12 Stability
+
+Microstructure-only: fold-stable (`stable across folds: True`) but at chance
+— stability without an effect is not evidence.
+
+Microstructure + cross-asset: **not** fold-stable (`spread 0.0330`,
+folds inconsistently above 0.5) on top of also not beating the noise floor —
+two independent reasons to reject, not one borderline reason.
+
+### §13 Decision gate: **RED**, both runs
+
+```
+new-information beats permutation null : False  (both runs)
+OLD+NEW improves over OLD alone         : False  (both runs; OLD+NEW is
+                                                   always slightly WORSE than
+                                                   OLD alone — added columns,
+                                                   added noise, no signal to
+                                                   offset it)
+```
+
+## 13b. Final Verdict
+
+**RED.** Two genuinely independent information-source batches — one native
+to the broker feed (spread, volume), one external market context (DXY, US
+rates, silver, oil) — were tested with full leakage and holdout-isolation
+proof, and neither produced a single feature that beat its own
+block-permutation null. `OLD + NEW` was worse than `OLD` alone in both runs.
+This is not "weak", it is the same absence the original feasibility gate
+found, now also checked in the two most plausible places new information
+could have been hiding.
 
 ## 14. Holdout Isolation — What Was Actually Verified
 
@@ -142,23 +227,35 @@ genuine research-region corruption). Must be re-verified against real data
 before trusting any experimental result — the script does this automatically
 before running anything else, and refuses to report a verdict if it fails.
 
-## 15. Recommended Next Experiment
+## 15. What Remains Untested
 
-```
-# Windows machine, MT5 running and logged in
-python scripts/fetch_training_candles.py            # now captures spread/real_volume
-python scripts/information_discovery.py --verify-holdout-isolation
-python scripts/information_discovery.py --permutations 200 --json research/information_discovery/information_audit.json
-python scripts/information_discovery.py --cross-asset --permutations 200
-```
+Both real-data runs completed 2026-08-17 and both returned RED (§13b).
+Everything below this line was true before those runs and is unchanged by
+them — no source tested here was expected to fix the original gate's
+finding, and none did.
 
-The first `information_discovery.py` call re-verifies holdout isolation
-against real data before anything else runs and refuses to proceed if it
-fails. If it passes, the microstructure-only run answers whether spread/volume
-carry anything; the `--cross-asset` run additionally attempts DXY/yields/
-silver/oil (network-dependent, best-effort, reports what actually fetched).
+What is left, honestly ranked by how likely it is to matter:
+
+1. **Historical economic calendar / news / sentiment** — still not available
+   (§4). This is the one category of information genuinely untested, because
+   it does not exist in this repository in archived form. Acquiring it means
+   a paid historical calendar feed or a news archive built forward from now,
+   not a code change.
+2. **A different timeframe (M15/M30)** — not fetched or tested anywhere in
+   this arc. `FEASIBILITY_REPORT.md` §8 found holding times mostly longer
+   than 2 bars, which argued against an obvious resolution mismatch, but
+   that argument was made on H4/H1 only.
+3. **A gold-only model with its own full pipeline** — XAUUSD was the one
+   instrument to score above 0.50 in earlier investigation phases, though
+   never survived direction-removal or noise-floor checks on its own. Testing
+   it properly means its own walk-forward validation, not reading the
+   per-symbol column of a pooled model.
+4. **Accepting the negative result.** Two independent, leakage-proven
+   information searches found nothing. The rule-based layer plus the six
+   trade-management layers already in production do not need an ML entry
+   filter to operate; a filter with no demonstrated edge only adds the risk
+   of blocking real trades on noise.
 
 Per the governing rule: no Optuna, no full XGBoost, no production model
-change until one of these runs returns GREEN or a defensible YELLOW — and even
-then, the next step is one fixed-hyperparameter XGBoost fit compared against
-the logistic baseline already computed here, not a hyperparameter search.
+change on this framework. If a future session pursues #1–#3, it goes through
+this same holdout-isolation-proven pipeline before any training step.
