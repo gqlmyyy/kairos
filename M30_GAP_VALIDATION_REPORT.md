@@ -209,3 +209,195 @@ Not touched: `models/entry/`, `analysis/models/entry_feature_spec.py`,
 `scripts/train_entry_model.py`'s labelling/dataset logic, any threshold,
 any risk/trading code, H4/H1 behavior in `validate_real_dataset.py`. This
 is Gate 1 only, and Gate 1 is not yet confirmed to pass on the real file.
+
+---
+
+## Round 2 — the real gap list came back, and it found real bugs in this fix
+
+Section 7 asked for the real output. It came back: 38,400 real bars,
+850 raw gaps, `EXPECTED_MARKET_GAP: 696 / SUSPICIOUS_GAP: 48 / DATA_ERROR:
+106`, a forming-candle failure, and — critically — the actual `DATA_ERROR`
+examples. Those examples are what made this round possible: three genuine
+bugs, all in round 1's own code, none of them the external validator's
+fault this time.
+
+### Root cause 1 — the forming-candle export was real, and round 1's own
+`check_completed` diagnosis was correct about the symptom
+
+The exported newest M30 bar (22:00 → 22:30 UTC) had not closed by the time
+`fetch_training_candles.py`'s manifest claimed the data was pulled. The
+manifest's `fetched_at` was captured **once**, before the whole
+multi-symbol, multi-timeframe loop started — so a run that took long enough
+compared a file against the wrong clock reading, and `rates[:-1]` assumed
+MT5 always hands back exactly one still-forming bar in a known array
+position.
+
+**Fix**: `fetch()` in `scripts/fetch_training_candles.py` now filters by
+`open_time + span <= real UTC now` (`_closed_by`) instead of dropping array
+position `-1`. Over-requests 3 extra bars and keeps whichever are actually
+closed, then trims to the requested count. Every manifest file entry now
+also carries its own `fetched_at` and `forming_candles_dropped`, and
+`check_completed` in both `validate_m30_candles.py` and
+`validate_real_dataset.py` compares a file against *its own* pull time
+first, falling back to the batch timestamp only if a file entry lacks one
+(files written before this fix). H4/H1 behavior is unaffected except that
+this same false-positive class is now closed for them too.
+
+### Root cause 2 — the daily-maintenance-pause rule had a hidden size ceiling
+
+Round 1's `classify_gaps` accepted a recurring daily pause only up to
+`suspicious_max_missing_bars * 2` = **4 bars**. The real broker's daily
+pause is **5 bars** (22:30→01:00, 2026-era) or **8 bars** (21:00→01:00,
+2023-era) — both larger than that ceiling, so every single instance of the
+routine, recurring, evidenced daily pause was falling through to
+`DATA_ERROR`. This one bug alone accounts for most of the 106.
+
+**Fix**: the ceiling is gone. `broker_maintenance` now accepts any size
+within tolerance of that hour's own **median** size in this series
+(`_typical_missing_bars`, ±50% + 1 bar slack) — consistency of hour and
+size across many days is the evidence a pause is routine, not an arbitrary
+absolute bar count. Verified with two direct regression tests using the
+report's own numbers: a 5-bar pause at 22:30 UTC and an 8-bar pause at
+21:00 UTC are both now accepted (`test_the_recurring_2026_style_daily_pause_is_accepted_at_its_real_size`,
+`test_a_larger_historical_daily_pause_is_also_accepted`).
+
+### Root cause 3 — only one daily-close hour was ever recognized, across a
+series that has (at least) two
+
+Round 1 picked a single "most common hour" globally. A multi-year MT5
+series whose server clock follows exchange DST — or whose broker simply
+changed its maintenance schedule at some point, as this one evidently did
+between the 2023 (21:00 UTC) and 2026 (22:30 UTC) portions of the real
+report — has **two** legitimate recurring hours, not one. Whichever season
+lost the "most common" contest got none of its gaps recognized as routine
+at all, forcing them into `SUSPICIOUS_GAP` or `DATA_ERROR` regardless of
+how consistently they recurred.
+
+**Fix**: `_daily_close_hours` now returns every hour that clears a
+recurrence floor (default 20 occurrences), not just the single most common
+one — `daily_close_hours_utc` in the result can (and, on this data,
+does) list more than one hour. Verified with
+`test_dst_produces_two_recognized_daily_close_hours_not_one`, which builds
+a fixture with two separate hour-clusters and confirms both are recognized
+independently.
+
+### A fourth thing that was imprecise, not wrong: gap-boundary semantics
+
+Round 1's `gap_start_t` was the *last present* candle's own timestamp; the
+real report describes gaps as "22:30 → 01:00" — the *missing* window,
+i.e. the last present candle's **close**. `gap_start_t` is now
+`prev_t + span` (first missing bar's open), and `duration_hours` is now
+exactly `missing_bars * span`, which reproduces the report's own numbers
+bar-for-bar. This wasn't a classification bug, but it made every printed
+gap boundary off by one bar from how a human (or the external tool) reads
+them, which matters for a field this document asks to be auditable.
+
+### Evidenced holiday calendar, not a textbook one
+
+The 2023 examples (Memorial Day, Juneteenth, Independence Day, Labor Day,
+Thanksgiving) and the 2024/2025/2026 Good-Friday-adjacent long weekends are
+now recognized by `us_market_holidays(year)` — computed per year (Good
+Friday via the Meeus/Jones/Butcher Easter algorithm, Memorial
+Day/Labor Day/Thanksgiving via nth-weekday-of-month arithmetic), not
+hard-coded to any single year, so it holds across the full 3+ year span
+and beyond. Deliberately **not** the full textbook NYSE holiday list (no
+MLK Day, no Presidents' Day) — every entry is backed by an actual gap in
+the real report; an unlisted holiday still gets a fair chance at the
+weekly-close or daily-maintenance rules before falling through to
+`DATA_ERROR`, which is the intended fail-closed behavior for something
+genuinely never seen before. Verified against the report's own three
+Good-Friday examples by exact timestamp, parametrized across all three
+years (`test_good_friday_is_recognized_in_every_year_of_the_dataset`).
+
+### What is still enforced, unchanged from round 1
+
+A recognized daily-close hour is not a blanket excuse — a gap at that hour
+whose size falls outside the tolerance band around the typical size, and
+that does not overlap a known holiday, still fails closed as `DATA_ERROR`
+(`test_an_outlier_at_the_recognized_hour_is_not_silently_absorbed`). No
+gap is whitelisted by proximity to an explained one; every classification
+still has to individually pass one of the three explained rules.
+
+### Verified on a reconstruction of the real report's exact shape
+
+Built a synthetic 2023-05-11 → 2026-08-17 M30 series combining everything
+the real report showed: a 4-hour (8-bar) daily pause at 21:00 UTC through
+2024, a 2.5-hour (5-bar) pause at 22:30 UTC from 2025 on, ordinary weekly
+closes, and the evidenced US holidays.
+
+```
+5. GAP CLASSIFICATION
+  XAUUSD_M30: 826 total gaps over 1194 days (35934 bars)
+  recognized daily-close hour(s) UTC: ['21:00', '22:00']
+    EXPECTED_MARKET_GAP  826
+    SUSPICIOUS_GAP       0
+    DATA_ERROR           0
+
+  by reason:
+    EXPECTED_MARKET_GAP  reason=broker_maintenance               644
+    EXPECTED_MARKET_GAP  reason=known_holiday                    26
+    EXPECTED_MARKET_GAP  reason=weekly_close                     156
+  ok    XAUUSD_M30: 0 DATA_ERROR gaps
+GATE 1 PASSED
+```
+
+Then removed 8 real hours of bars on an unrelated Wednesday to re-confirm
+fail-closed behavior wasn't lost in the process:
+
+```
+  FAIL  XAUUSD_M30: 1 DATA_ERROR gaps — genuinely unexplained, listing every one below for audit:
+    2025-08-13T15:00:00+00:00 (Wed) -> 2025-08-13T19:00:00+00:00 (Wed)  missing=8 bars  4.0h  reason=unexplained_missing_candles
+GATE 1 FAILED
+```
+
+### Files changed, round 2
+
+* `scripts/fetch_training_candles.py` — `_closed_by`, rewritten `fetch()`,
+  per-file manifest provenance.
+* `analysis/features/timeframe_alignment.py` — `classify_gaps` rewritten:
+  fixed gap-boundary semantics, `_daily_close_hours` (multi-hour),
+  `_typical_missing_bars` (no hard cap), `us_market_holidays` +
+  `_easter_sunday`/`_nth_weekday`/`_last_weekday` (evidenced, per-year
+  calendar), machine-readable `reason` codes matching the brief exactly
+  (`weekly_close`, `broker_maintenance`, `known_holiday`,
+  `thin_liquidity_or_irregular_session`, `unexplained_missing_candles`).
+* `scripts/validate_m30_candles.py` — per-file `fetched_at` preference,
+  prints `daily_close_hours_utc` and a reason breakdown.
+* `scripts/validate_real_dataset.py` — same per-file `fetched_at`
+  preference for H4/H1 (same false-positive class, same fix, no behavior
+  change for correctly-timed data).
+* `tests/test_fetch_training_candles.py` (new) — `_closed_by` unit tests,
+  MT5-free.
+* `tests/test_timeframe_alignment.py` — `TestClassifyGaps` rewritten:
+  18 tests total including the two size-regression tests, the DST
+  dual-hour test, the three parametrized real-date Good-Friday tests, and
+  the outlier-is-not-absorbed guard.
+
+### Test results, round 2
+
+`pytest -q`: **945 passed**, 1 pre-existing unrelated failure
+(`test_predict_proba_parity.py` — exit-model artifact/schema feature-count
+mismatch, nothing to do with M30 or this fix, present before this work
+started).
+
+### Still needed from the real file
+
+This round was verified on a synthetic reconstruction of the real report's
+own numbers, not the real file itself. Re-run:
+
+```bash
+git pull
+python scripts/fetch_training_candles.py --years 3 --symbols XAUUSD
+python scripts/validate_m30_candles.py --symbols XAUUSD
+```
+
+Expected, if the diagnosis above is complete: the forming-candle failure
+is gone (the fetch itself no longer exports one), and the `DATA_ERROR`
+count drops from 106 toward 0 — remaining ones, if any, are printed
+individually with their exact UTC timestamp, weekday and size, which is
+what determines whether anything past this point is a new, previously
+unseen broker behavior worth a fourth root-cause rule, or genuine data
+corruption.
+
+Boundary unchanged: no model, training, label, threshold or trading-logic
+code touched in round 2 either.

@@ -155,10 +155,10 @@ def check_series(candles_by_symbol) -> dict:
 def check_completed(candles_by_symbol, manifest) -> None:
     section("3. COMPLETED CANDLES ONLY")
 
-    fetched_at = None
+    batch_fetched_at = None
     if manifest.get("fetched_at"):
         try:
-            fetched_at = datetime.fromisoformat(manifest["fetched_at"]).timestamp()
+            batch_fetched_at = datetime.fromisoformat(manifest["fetched_at"]).timestamp()
         except ValueError:
             warn(f"cannot parse fetched_at: {manifest['fetched_at']!r}")
 
@@ -169,6 +169,23 @@ def check_completed(candles_by_symbol, manifest) -> None:
             name = f"{symbol}_{timeframe}"
             newest = float(series[-1]["t"])
             closes_at = ta.close_time(newest, timeframe)
+
+            # Prefer this file's own fetch timestamp (present in every
+            # manifest written by fetch_training_candles.py since the
+            # per-file provenance fix) over the batch-level one: a
+            # multi-symbol, multi-timeframe run can take long enough that
+            # comparing against when the whole run STARTED, rather than when
+            # this file was actually pulled, produces a false "still
+            # forming" verdict on a candle that legitimately closed in
+            # between.
+            entry = manifest.get("files", {}).get(name, {})
+            fetched_at_raw = entry.get("fetched_at")
+            fetched_at = batch_fetched_at
+            if fetched_at_raw:
+                try:
+                    fetched_at = datetime.fromisoformat(fetched_at_raw).timestamp()
+                except ValueError:
+                    warn(f"{name}: cannot parse per-file fetched_at: {fetched_at_raw!r}")
 
             if closes_at > now:
                 fail(f"{name}: newest bar opens {utc(newest)} and does not close until "

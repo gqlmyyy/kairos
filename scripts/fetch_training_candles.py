@@ -41,6 +41,17 @@ over-the-counter instruments — this is reported, not assumed, by
 Files fetched before this field was added do not have these keys.
 ``load_candles`` in ``scripts/train_entry_model.py`` and the microstructure
 feature builder both treat their absence as "not available", not as zero.
+
+Only completed candles: ``fetch()`` filters by actual close time against real
+UTC "now" (see ``_closed_by``), not by dropping a fixed array position. A run
+whose manifest's batch-level ``fetched_at`` was captured well before a
+particular file's own MT5 round trip actually happened is exactly the
+scenario a position-based drop cannot defend against — the filter is
+timestamp-based specifically so it stays correct regardless of how long the
+batch takes or what MT5 hands back. Each manifest file entry also carries its
+own ``fetched_at`` and ``forming_candles_dropped`` for that reason: a
+completed-candle check must compare a file's newest candle against *that
+file's* pull time, not the run's start time.
 """
 
 from __future__ import annotations
@@ -53,6 +64,7 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from analysis.features import timeframe_alignment as ta  # noqa: E402
 from config import SYMBOLS  # noqa: E402
 from utils.logger import get_logger  # noqa: E402
 
@@ -86,8 +98,32 @@ def _mt5_timeframe(mt5, tf: str):
     }[tf]
 
 
-def fetch(symbol: str, timeframe: str, count: int) -> list:
-    """Completed candles only, newest last."""
+def _closed_by(row: dict, timeframe: str, now: float) -> bool:
+    """Has this bar's window actually elapsed, by wall-clock UTC?
+
+    Requesting one extra bar and dropping array position -1 assumes MT5
+    always returns exactly one still-forming bar in a known array slot.
+    That held until it didn't: a run whose manifest claimed `fetched_at`
+    hours before the file's own newest candle had actually closed proved the
+    assumption isn't safe to rely on blindly — whatever the exact cause (a
+    slow multi-symbol run, a retry, an MT5 ordering edge case), the fix is to
+    stop trusting position and check the thing that actually matters: has
+    `open_time + span` passed real UTC "now" or not. That question answers
+    itself correctly regardless of how many rows MT5 handed back or in what
+    order.
+    """
+    return float(row["time"]) + ta.duration(timeframe) <= now
+
+
+def fetch(symbol: str, timeframe: str, count: int) -> dict:
+    """Completed candles only, newest last.
+
+    Returns ``{"candles": [...], "forming_dropped": N, "fetched_at": iso}``
+    — the drop count and the real fetch timestamp go into the manifest per
+    file (see main()) rather than only once for the whole run, so a later
+    completed-candle check compares against when THIS file was actually
+    pulled, not when the batch started.
+    """
     import MetaTrader5 as mt5  # imported here so the module loads off-Windows
 
     from data.market.mt5_session import ensure_symbol, mt5_call
@@ -95,10 +131,13 @@ def fetch(symbol: str, timeframe: str, count: int) -> list:
     if not ensure_symbol(symbol):
         raise RuntimeError(f"symbol {symbol} not available in Market Watch")
 
+    # Ask for a few extra bars: the filter below decides what is actually
+    # closed, so over-requesting costs nothing and guards against needing
+    # more than the traditional "exactly one forming bar" assumption.
     with mt5_call():
-        # +1 then drop the last: the newest bar is still forming, and including
-        # it would leak partial future information into a training row.
-        rates = mt5.copy_rates_from_pos(symbol, _mt5_timeframe(mt5, timeframe), 0, count + 1)
+        rates = mt5.copy_rates_from_pos(symbol, _mt5_timeframe(mt5, timeframe), 0, count + 3)
+    fetched_at = datetime.now(timezone.utc)
+    now = fetched_at.timestamp()
 
     if rates is None or len(rates) == 0:
         raise RuntimeError(f"no candles returned for {symbol} {timeframe}: {mt5.last_error()}")
@@ -109,6 +148,8 @@ def fetch(symbol: str, timeframe: str, count: int) -> list:
     # is known at the same instant as OHLC (it is a property of that closed
     # bar, not of the future), so capturing it adds no look-ahead risk beyond
     # what get_candles already carries for open/high/low/close.
+    closed = [r for r in rates if _closed_by(r, timeframe, now)]
+    forming_dropped = len(rates) - len(closed)
     rows = [
         {
             "t": float(r["time"]),
@@ -120,10 +161,13 @@ def fetch(symbol: str, timeframe: str, count: int) -> list:
             "spread": float(r["spread"]),
             "real_volume": float(r["real_volume"]),
         }
-        for r in rates[:-1]
+        for r in closed
     ]
     rows.sort(key=lambda c: c["t"])
-    return rows
+    if len(rows) > count:
+        rows = rows[-count:]
+    return {"candles": rows, "forming_dropped": forming_dropped,
+            "fetched_at": fetched_at.isoformat()}
 
 
 def main() -> int:
@@ -148,30 +192,45 @@ def main() -> int:
         return 1
 
     os.makedirs(args.out, exist_ok=True)
-    manifest = {"fetched_at": datetime.now(timezone.utc).isoformat(), "files": {}}
+    batch_started_at = datetime.now(timezone.utc).isoformat()
+    manifest = {"fetched_at": batch_started_at, "files": {}}
     failures = []
 
     for symbol in args.symbols:
         for tf in TIMEFRAMES:
             count = int(_BARS_PER_YEAR[tf] * args.years)
             try:
-                candles = fetch(symbol, tf, count)
+                result = fetch(symbol, tf, count)
             except Exception as exc:
                 logger.error("fetch failed for %s %s: %s", symbol, tf, exc)
                 failures.append(f"{symbol} {tf}: {exc}")
                 continue
 
+            candles = result["candles"]
             path = os.path.join(args.out, f"{symbol}_{tf}.json")
             with open(path, "w", encoding="utf-8") as fh:
                 json.dump(candles, fh)
 
             first = datetime.fromtimestamp(candles[0]["t"], tz=timezone.utc).date()
             last = datetime.fromtimestamp(candles[-1]["t"], tz=timezone.utc).date()
+            last_close = datetime.fromtimestamp(
+                ta.close_time(candles[-1]["t"], tf), tz=timezone.utc)
             manifest["files"][f"{symbol}_{tf}"] = {
-                "path": path, "bars": len(candles),
-                "first": str(first), "last": str(last),
+                "path": path,
+                "symbol": symbol,
+                "timeframe": tf,
+                "bars": len(candles),
+                "first": str(first),
+                "last": str(last),
+                # This file's own pull, not the batch start — the check that
+                # a candle wasn't still forming when exported must compare
+                # against the moment THIS file was actually fetched.
+                "fetched_at": result["fetched_at"],
+                "forming_candles_dropped": result["forming_dropped"],
+                "last_completed_candle_close_utc": last_close.isoformat(),
             }
-            print(f"  {symbol:8s} {tf:3s}  {len(candles):6d} bars  {first} -> {last}")
+            print(f"  {symbol:8s} {tf:3s}  {len(candles):6d} bars  {first} -> {last}"
+                  f"  (dropped {result['forming_dropped']} forming)")
 
     with open(os.path.join(args.out, "manifest.json"), "w", encoding="utf-8") as fh:
         json.dump(manifest, fh, indent=2)
