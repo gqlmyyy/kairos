@@ -32,6 +32,7 @@ import argparse
 import json
 import os
 import sys
+from collections import Counter
 from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -133,12 +134,19 @@ def check_completed(series, symbol: str, manifest: dict) -> None:
     section("3. COMPLETED CANDLES ONLY")
     name = f"{symbol}_{TIMEFRAME}"
 
+    # Prefer this file's own fetch timestamp over the batch-level one: a
+    # multi-symbol, multi-timeframe run can take long enough that comparing
+    # against when the WHOLE run started, rather than when this particular
+    # file was actually pulled, produces a false "still forming" verdict on
+    # a candle that legitimately closed between the two.
+    entry = manifest.get("files", {}).get(f"{symbol}_{TIMEFRAME}", {})
+    fetched_at_raw = entry.get("fetched_at") or manifest.get("fetched_at")
     fetched_at = None
-    if manifest.get("fetched_at"):
+    if fetched_at_raw:
         try:
-            fetched_at = datetime.fromisoformat(manifest["fetched_at"]).timestamp()
+            fetched_at = datetime.fromisoformat(fetched_at_raw).timestamp()
         except ValueError:
-            warn(f"cannot parse fetched_at: {manifest['fetched_at']!r}")
+            warn(f"cannot parse fetched_at: {fetched_at_raw!r}")
 
     now = datetime.now(timezone.utc).timestamp()
     newest = float(series[-1]["t"])
@@ -154,6 +162,11 @@ def check_completed(series, symbol: str, manifest: dict) -> None:
              f"{utc(fetched_at)} — it was still forming when exported")
     else:
         ok(f"{name}: newest bar closed {utc(closes_at)}, before the fetch")
+
+    dropped = entry.get("forming_candles_dropped")
+    if dropped is not None:
+        ok(f"{name}: fetch_training_candles.py dropped {dropped} forming candle(s) "
+           f"at export time")
 
 
 def check_fields(series, symbol: str) -> None:
@@ -187,22 +200,32 @@ def check_gaps(series, symbol: str) -> None:
     total_span_days = (float(series[-1]["t"]) - float(series[0]["t"])) / 86400.0
     print(f"  {name}: {len(gaps)} total gaps over {total_span_days:.0f} days "
           f"({len(series)} bars)")
+    hours = result.get("daily_close_hours_utc") or []
+    print(f"  recognized daily-close hour(s) UTC: "
+          f"{[f'{h:02d}:00' for h in hours] or '(none established — series too short/sparse)'}")
     for category in ("EXPECTED_MARKET_GAP", "SUSPICIOUS_GAP", "DATA_ERROR"):
         print(f"    {category:20s} {counts.get(category, 0)}")
+
+    reason_counts = Counter((g["category"], g["reason"]) for g in gaps)
+    if reason_counts:
+        print("\n  by reason:")
+        for (category, reason), n in sorted(reason_counts.items()):
+            print(f"    {category:20s} reason={reason:32s} {n}")
 
     error_gaps = [g for g in gaps if g["category"] == "DATA_ERROR"]
     if error_gaps:
         fail(f"{name}: {len(error_gaps)} DATA_ERROR gaps — genuinely unexplained, "
              f"listing every one below for audit:")
+        weekday_names = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
         for g in error_gaps:
-            weekday_names = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
             print(f"    {g['gap_start_utc']} ({weekday_names[g['start_weekday']]}) -> "
                   f"{g['gap_end_utc']} ({weekday_names[g['end_weekday']]})  "
                   f"missing={g['missing_bars']} bars  {g['duration_hours']:.1f}h  "
-                  f"reason: {g['reason']}")
+                  f"reason={g['reason']}")
     else:
         ok(f"{name}: 0 DATA_ERROR gaps — every gap explained by the weekly close, a known "
-           f"holiday, a recurring daily pause, or small enough to be plausible thin liquidity")
+           f"holiday, the broker's own recurring daily pause, or small enough to be "
+           f"plausible thin liquidity")
 
     suspicious = counts.get("SUSPICIOUS_GAP", 0)
     if suspicious:

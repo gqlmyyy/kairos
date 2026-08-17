@@ -239,11 +239,28 @@ class TestDiagnoseGrid:
         assert report["distinct_offsets"] == 2
 
 
+def weekdays(start_y, start_m, start_d, n):
+    """n consecutive weekday (Mon-Fri) dates starting from the given date."""
+    import datetime as _dt
+    d = _dt.date(start_y, start_m, start_d)
+    out = []
+    while len(out) < n:
+        if d.weekday() < 5:
+            out.append(d)
+        d += _dt.timedelta(days=1)
+    return out
+
+
 class TestClassifyGaps:
-    """Gate 1 for M30: a gap must be explained by the calendar or by its own
-    recurrence, or it fails closed as DATA_ERROR. These fixtures use real
-    calendar dates (2024-01-01 is a Monday) because the classifier reasons
-    about actual weekdays, not offsets from an arbitrary epoch."""
+    """Gate 1 for M30: a gap must be explained by the calendar or by this
+    series' own recurring daily-close structure, or it fails closed as
+    DATA_ERROR. These fixtures use real calendar dates (2024-01-01 is a
+    Monday) because the classifier reasons about actual weekdays.
+
+    `gap_start_t` is the first MISSING bar's open (= the last present bar's
+    close), not the last present bar's own open — matching how a gap like
+    "22:30 -> 01:00" reads to a human, and matching the real report this
+    module was rewritten to fix."""
 
     def test_the_weekly_close_is_accepted(self):
         """Friday evening to Sunday evening — the ordinary FX/CFD weekend."""
@@ -253,7 +270,7 @@ class TestClassifyGaps:
         )
         result = ta.classify_gaps(candles, "M30")
         assert result["counts"] == {"EXPECTED_MARKET_GAP": 1}
-        assert result["gaps"][0]["reason"].startswith("weekly close")
+        assert result["gaps"][0]["reason"] == "weekly_close"
 
     def test_a_long_weekend_from_a_monday_holiday_is_still_accepted(self):
         """The weekly-close rule keys off the START (Friday), so a gap that
@@ -275,24 +292,121 @@ class TestClassifyGaps:
         )
         result = ta.classify_gaps(candles, "M30")
         assert result["counts"] == {"EXPECTED_MARKET_GAP": 1}
-        assert "holiday" in result["gaps"][0]["reason"]
+        assert result["gaps"][0]["reason"] == "known_holiday"
 
-    def test_a_recurring_daily_pause_is_accepted_as_one_explained_pattern(self):
-        """A broker that drops one bar at the same UTC hour every weekday is
-        exhibiting one explained, recurring event — not ten anomalies."""
-        candles = m30_grid(
-            ts(2024, 1, 8), ts(2024, 1, 20),  # two full weeks, clear of Jan 1
-            skip_ranges=[
-                (ts(2024, 1, d, 21), ts(2024, 1, d, 21, 30))
-                for d in (8, 9, 10, 11, 12, 15, 16, 17, 18, 19)  # every weekday
-            ],
-        )
+    @pytest.mark.parametrize("start,end", [
+        # Exact examples from the real XAUUSD M30 report this fix addresses —
+        # Good Friday is a floating date, so hard-coding a fixed (month, day)
+        # could never have caught these. Verified independently (not derived
+        # from the function under test): Easter Sunday falls on 2024-03-31,
+        # 2025-04-20 and 2026-04-05, so Good Friday is two days earlier.
+        (ts(2024, 3, 28, 22, 30), ts(2024, 4, 1, 1, 0)),
+        (ts(2025, 4, 17, 23, 30), ts(2025, 4, 21, 1, 0)),
+        (ts(2026, 4, 2, 22, 30), ts(2026, 4, 6, 1, 0)),
+    ])
+    def test_good_friday_is_recognized_in_every_year_of_the_dataset(self, start, end):
+        """Not hard-coded to one year of the 3-year span — each occurrence is
+        computed from that year's actual Easter date."""
+        margin = 3 * 86400.0
+        candles = m30_grid(start - margin, end + margin, skip_ranges=[(start, end)])
         result = ta.classify_gaps(candles, "M30")
+        assert result["counts"] == {"EXPECTED_MARKET_GAP": 1}
+        assert result["gaps"][0]["reason"] == "known_holiday"
+
+    def test_the_recurring_2026_style_daily_pause_is_accepted_at_its_real_size(self):
+        """Direct regression test for the reported bug: a ~2.5-hour (5-bar)
+        recurring 22:30->01:00 UTC pause was previously rejected as
+        DATA_ERROR because an earlier version of this function capped how
+        large a 'recurring daily pause' was allowed to be. There is no such
+        cap now — consistency of hour and size across many days is the
+        evidence, not the absolute duration."""
+        days = weekdays(2026, 3, 2, 15)
+        candles = m30_grid(
+            ts(2026, 3, 1), ts(2026, 3, 1) + 23 * 86400.0,
+            skip_ranges=[(ts(d.year, d.month, d.day, 22, 30),
+                           ts(d.year, d.month, d.day, 22, 30) + 5 * 1800.0)
+                         for d in days],
+        )
+        result = ta.classify_gaps(candles, "M30", min_daily_recurrence=10)
         assert result["counts"].get("DATA_ERROR", 0) == 0
         assert result["counts"].get("SUSPICIOUS_GAP", 0) == 0
-        assert result["counts"]["EXPECTED_MARKET_GAP"] >= 10
-        assert all("recurring daily pause" in g["reason"] for g in result["gaps"]
-                    if g["start_weekday"] < 5)
+        weekday_gaps = [g for g in result["gaps"] if g["start_weekday"] < 5]
+        assert len(weekday_gaps) == 15
+        # Friday's instance of the routine pause legitimately gets relabelled
+        # "weekly_close" once it runs into the weekend — still explained,
+        # still not blocking, just a more specific reason.
+        assert all(g["category"] == "EXPECTED_MARKET_GAP" for g in weekday_gaps)
+        assert {g["reason"] for g in weekday_gaps} <= {"broker_maintenance", "weekly_close"}
+        assert all(g["missing_bars"] == 5 for g in weekday_gaps)
+
+    def test_a_larger_historical_daily_pause_is_also_accepted(self):
+        """A different broker era, a different size (~4 hours / 8 bars,
+        21:00->01:00 UTC, as seen in the 2023 portion of the real report) —
+        the rule is driven by this series' own consistency, not a
+        hard-coded expected size."""
+        days = weekdays(2023, 6, 1, 15)
+        candles = m30_grid(
+            ts(2023, 5, 31), ts(2023, 5, 31) + 23 * 86400.0,
+            skip_ranges=[(ts(d.year, d.month, d.day, 21, 0),
+                           ts(d.year, d.month, d.day, 21, 0) + 8 * 1800.0)
+                         for d in days],
+        )
+        result = ta.classify_gaps(candles, "M30", min_daily_recurrence=10)
+        assert result["counts"].get("DATA_ERROR", 0) == 0
+        weekday_gaps = [g for g in result["gaps"] if g["start_weekday"] < 5]
+        assert len(weekday_gaps) == 15
+        assert all(g["category"] == "EXPECTED_MARKET_GAP" for g in weekday_gaps)
+        # June 19 in this window is Juneteenth — correctly caught as
+        # known_holiday rather than broker_maintenance, which is the
+        # classifier working as intended, not a test-fixture accident.
+        assert {g["reason"] for g in weekday_gaps} <= {
+            "broker_maintenance", "weekly_close", "known_holiday"}
+        assert all(g["missing_bars"] == 8 for g in weekday_gaps)
+
+    def test_dst_produces_two_recognized_daily_close_hours_not_one(self):
+        """The actual root cause behind most of the reported DATA_ERROR
+        count: an MT5 server clock that follows exchange DST does not have
+        ONE recurring close hour across a multi-year series, it has two —
+        and a classifier that only ever looks for a single dominant hour
+        would recognize one season and fail the other. Both clusters here
+        are the same explained event; only the UTC hour differs."""
+        winter_days = weekdays(2024, 1, 8, 15)
+        summer_days = weekdays(2024, 6, 3, 15)
+        skips = (
+            [(ts(d.year, d.month, d.day, 21, 0), ts(d.year, d.month, d.day, 21, 0) + 5 * 1800.0)
+             for d in winter_days]
+            + [(ts(d.year, d.month, d.day, 22, 0), ts(d.year, d.month, d.day, 22, 0) + 5 * 1800.0)
+               for d in summer_days]
+        )
+        candles = m30_grid(ts(2024, 1, 8), ts(2024, 6, 3) + 30 * 86400.0, skip_ranges=skips)
+        result = ta.classify_gaps(candles, "M30", min_daily_recurrence=10)
+        assert result["daily_close_hours_utc"] == [21, 22]
+        assert result["counts"] == {"EXPECTED_MARKET_GAP": 30}
+        # June 19 in the summer window is Juneteenth — correctly caught as
+        # known_holiday, which is the classifier working as intended.
+        assert {g["reason"] for g in result["gaps"]} <= {
+            "broker_maintenance", "weekly_close", "known_holiday"}
+        assert {g["start_hour_utc"] for g in result["gaps"]} == {21, 22}
+
+    def test_an_outlier_at_the_recognized_hour_is_not_silently_absorbed(self):
+        """A recognized daily-close hour is not a blanket excuse: a gap at
+        that hour whose size is wildly outside what actually recurs there —
+        and that is not a known holiday — still fails closed. Consistency
+        with the pattern is the evidence, not merely landing on the hour."""
+        routine_days = weekdays(2024, 2, 1, 12)
+        outlier_day = weekdays(2024, 2, 20, 1)[0]  # a plain Tuesday, no holiday
+        skips = [(ts(d.year, d.month, d.day, 21, 0), ts(d.year, d.month, d.day, 21, 0) + 2 * 1800.0)
+                 for d in routine_days if d != outlier_day]
+        skips.append((ts(outlier_day.year, outlier_day.month, outlier_day.day, 21, 0),
+                       ts(outlier_day.year, outlier_day.month, outlier_day.day, 21, 0) + 20 * 1800.0))
+        candles = m30_grid(ts(2024, 2, 1), ts(2024, 2, 1) + 25 * 86400.0, skip_ranges=skips)
+        result = ta.classify_gaps(candles, "M30", min_daily_recurrence=8)
+        outlier_gaps = [g for g in result["gaps"] if g["missing_bars"] == 20]
+        assert len(outlier_gaps) == 1
+        assert outlier_gaps[0]["category"] == "DATA_ERROR"
+        assert outlier_gaps[0]["reason"] == "unexplained_missing_candles"
+        routine_gaps = [g for g in result["gaps"] if g["missing_bars"] == 2]
+        assert all(g["category"] == "EXPECTED_MARKET_GAP" for g in routine_gaps)
 
     def test_a_single_small_weekday_gap_is_suspicious_not_silently_accepted(self):
         """One isolated small gap must not be waved through as 'recurring' —
@@ -303,6 +417,7 @@ class TestClassifyGaps:
         )
         result = ta.classify_gaps(candles, "M30")
         assert result["counts"] == {"SUSPICIOUS_GAP": 1}
+        assert result["gaps"][0]["reason"] == "thin_liquidity_or_irregular_session"
 
     def test_an_unexplained_weekday_gap_fails_closed_as_data_error(self):
         """A large, non-recurring, mid-week gap with no calendar excuse is
@@ -314,13 +429,14 @@ class TestClassifyGaps:
         )
         result = ta.classify_gaps(candles, "M30")
         assert result["counts"] == {"DATA_ERROR": 1}
-        assert "not the weekly close" in result["gaps"][0]["reason"]
+        assert result["gaps"][0]["reason"] == "unexplained_missing_candles"
 
     def test_a_friday_daytime_outage_is_not_confused_with_the_weekly_close(self):
         """An outage starting Friday morning and lasting into the weekend is
-        not the same event as the market closing for the weekend — the
-        weekly-close rule requires the gap to start in the afternoon/evening,
-        when the market actually closes, not merely to end on a Saturday."""
+        not the same event as the market closing for the weekend — with no
+        established daily-close hour yet, the fallback weekly-close rule
+        requires the gap to start in the afternoon/evening, not merely to
+        end on a Saturday."""
         candles = m30_grid(
             ts(2024, 1, 1), ts(2024, 1, 8),
             skip_ranges=[(ts(2024, 1, 5, 9), ts(2024, 1, 7, 22))],  # Fri 09:00 start
@@ -333,10 +449,14 @@ class TestClassifyGaps:
         result = ta.classify_gaps(candles, "M30")
         assert result["gaps"] == []
         assert result["counts"] == {}
+        assert result["daily_close_hours_utc"] == []
 
     def test_classification_is_deterministic_and_reads_only_timestamps(self):
         """Same series in, same classification out — no hidden state, no
-        dependence on OHLC values (a gap is a timestamp-arithmetic question)."""
+        dependence on OHLC values (a gap is a timestamp-arithmetic question),
+        and therefore no way for this to introduce a look-ahead: the answer
+        for the region before `at` cannot depend on anything after it, since
+        it does not depend on OHLC content at all."""
         candles = m30_grid(
             ts(2024, 1, 1), ts(2024, 1, 8),
             skip_ranges=[(ts(2024, 1, 5, 21), ts(2024, 1, 7, 22))],

@@ -28,8 +28,9 @@ system adds gets the same treatment by construction.
 from __future__ import annotations
 
 import bisect
+import statistics
 from collections import Counter
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Sequence
 
 # Seconds per bar. Names match config.TF_TREND / TF_DECISION / TF_TIMING and
@@ -276,61 +277,168 @@ def diagnose_grid(candles: Sequence[Dict[str, Any]], timeframe: str) -> Dict[str
     }
 
 
-# Calendar dates (month, day) where gold/FX-CFD brokers commonly close
-# entirely, regardless of weekday. Deliberately short: this is a supplement
-# to the weekday-based weekly-close rule below, not a replacement for it, and
-# an unlisted holiday still gets a fair chance to match that rule or the
-# recurring-daily-pause rule before falling through to DATA_ERROR.
-KNOWN_MARKET_HOLIDAYS_MONTH_DAY = frozenset({
-    (12, 25),  # Christmas Day
-    (1, 1),    # New Year's Day
-})
+def _easter_sunday(year: int) -> date:
+    """Anonymous Gregorian algorithm (Meeus/Jones/Butcher). Good Friday and
+    Easter Monday closures are keyed off this, since neither has a fixed
+    (month, day)."""
+    a = year % 19
+    b = year // 100
+    c = year % 100
+    d = b // 4
+    e = b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i = c // 4
+    k = c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day_of_month = ((h + l - 7 * m + 114) % 31) + 1
+    return date(year, month, day_of_month)
 
-# A Friday gap has to start in the afternoon/evening to plausibly be the
-# weekly close — an outage that begins Friday at 09:00 UTC and happens to
-# still be down at the weekend is not the same event as the market closing
-# for the weekend, even though both end on a Saturday.
+
+def _nth_weekday(year: int, month: int, weekday: int, n: int) -> date:
+    """The n-th occurrence of `weekday` (Monday=0) in `month`, 1-indexed."""
+    first = date(year, month, 1)
+    offset = (weekday - first.weekday()) % 7
+    return first + timedelta(days=offset + 7 * (n - 1))
+
+
+def _last_weekday(year: int, month: int, weekday: int) -> date:
+    if month == 12:
+        last_of_month = date(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        last_of_month = date(year, month + 1, 1) - timedelta(days=1)
+    offset = (last_of_month.weekday() - weekday) % 7
+    return last_of_month - timedelta(days=offset)
+
+
+def us_market_holidays(year: int) -> set:
+    """Dates this instrument's broker is evidenced to close for.
+
+    Deliberately not a textbook exchange-holiday list — every entry here is
+    backed by an actual gap seen in the real XAUUSD M30 export (see
+    M30_GAP_VALIDATION_REPORT.md). MLK Day and Presidents' Day are common
+    NYSE holidays but were NOT included because nothing in the observed gap
+    pattern evidenced gold trading actually pausing for them; adding them
+    on assumption would risk waving through a genuinely unexplained gap
+    that only coincides with the date. An unlisted holiday still gets a
+    fair chance at the weekly-close or broker-maintenance rules below
+    before falling through to DATA_ERROR — the point of a short, evidenced
+    list is that a truly novel unexplained gap stays unexplained.
+
+    Computed per year, not hard-coded per date, so this holds across the
+    full multi-year span rather than only whichever year prompted it.
+    """
+    easter = _easter_sunday(year)
+    return {
+        date(year, 1, 1),                    # New Year's Day
+        easter - timedelta(days=2),          # Good Friday
+        _last_weekday(year, 5, 0),            # Memorial Day: last Monday of May
+        date(year, 6, 19),                    # Juneteenth
+        date(year, 7, 4),                     # Independence Day
+        _nth_weekday(year, 9, 0, 1),           # Labor Day: 1st Monday of September
+        _nth_weekday(year, 11, 3, 4),          # Thanksgiving: 4th Thursday of November
+        date(year, 12, 25),                   # Christmas Day
+    }
+
+
+def _overlaps_known_holiday(start_t: float, end_t: float) -> bool:
+    day = datetime.fromtimestamp(start_t, tz=timezone.utc).date()
+    end_day = datetime.fromtimestamp(end_t, tz=timezone.utc).date()
+    holidays: set = set()
+    years_loaded: set = set()
+    while day <= end_day:
+        if day.year not in years_loaded:
+            holidays |= us_market_holidays(day.year)
+            years_loaded.add(day.year)
+        if day in holidays:
+            return True
+        day += timedelta(days=1)
+    return False
+
+
+# Fallback only, used when a series is too short or too sparse to have
+# established its own recurring daily-close hour(s) yet (see
+# `_daily_close_hours`) — a Friday gap has to start in the afternoon/evening
+# to plausibly be the weekly close at all, whatever hour that turns out to
+# be exactly.
 _FRIDAY_CLOSE_EARLIEST_HOUR_UTC = 12
+
+
+def _daily_close_hours(gaps: List[Dict[str, Any]], *, min_recurrence: int) -> set:
+    """Which UTC hour(s) this series' broker consistently starts a daily
+    close at.
+
+    There can legitimately be more than one: an MT5 server clock that
+    follows exchange DST drifts this hour by an hour twice a year, splitting
+    a multi-year series into two (or more) equally legitimate clusters
+    rather than one dominant hour — a classifier that only ever looks for a
+    single "most common" hour silently fails half the year.
+    """
+    hour_counts = Counter(g["start_hour_utc"] for g in gaps if g["start_weekday"] < 5)
+    return {hour for hour, n in hour_counts.items() if n >= min_recurrence}
+
+
+def _typical_missing_bars(gaps: List[Dict[str, Any]], hour: int,
+                           *, max_bars_for_typical: int) -> Optional[float]:
+    """The routine size of the daily pause at `hour`, from short instances
+    only — a rare multi-day holiday gap that happens to start at the same
+    hour must not drag this median toward "anything is typical"."""
+    sizes = [g["missing_bars"] for g in gaps
+             if g["start_hour_utc"] == hour and g["start_weekday"] < 5
+             and g["missing_bars"] <= max_bars_for_typical]
+    return statistics.median(sizes) if sizes else None
 
 
 def classify_gaps(
     candles: Sequence[Dict[str, Any]],
     timeframe: str,
     *,
-    daily_pause_share_threshold: float = 0.4,
+    min_daily_recurrence: int = 20,
+    daily_pause_tolerance: float = 0.5,
+    max_bars_for_typical_pause: int = 16,
     suspicious_max_missing_bars: int = 2,
 ) -> Dict[str, Any]:
     """Classify every gap as an expected closure, a plausible thin patch, or
-    an unexplained error — by calendar, not by expected duration.
+    an unexplained error — by calendar and by this series' own recurring
+    structure, never by matching a hard-coded expected duration.
 
-    Matching an exact expected gap LENGTH is the wrong tool here: brokers
-    differ on the exact minute their Friday close and Sunday open land, and
-    an MT5 server clock that follows exchange DST drifts the UTC hour of
-    every session boundary by an hour twice a year. Either one would make a
-    duration-matching classifier misjudge real weekend closes for roughly
-    half the year. Matching by day-of-week is immune to both, because it
-    only asks *which day* a gap starts and ends on, never *what time*.
+    Matching an exact expected gap LENGTH is the wrong tool: brokers differ
+    on the exact minute their close lands, and an MT5 server clock that
+    follows exchange DST drifts the UTC hour of every session boundary by an
+    hour twice a year. A duration-matching classifier would misjudge real
+    closures for roughly half the year. This one instead:
 
-    Three categories, most permissive check tried first:
+    1. Learns this series' own recurring daily-close hour(s) and the typical
+       (median) size of the pause at each one (`_daily_close_hours`,
+       `_typical_missing_bars`) — data-driven, not assumed, and not capped
+       at an arbitrary bar count: a broker's daily maintenance window can
+       legitimately run for hours, and the evidence that it is routine is
+       that it recurs at a consistent hour with a consistent size, not that
+       it is short.
+    2. ``weekly_close`` — starts on Friday at a recognized daily-close hour
+       (or, if none has been established yet, the afternoon/evening
+       fallback) and ends Saturday, Sunday or Monday.
+    3. ``known_holiday`` — the gap's date range overlaps a US market holiday
+       actually evidenced in this instrument's gap history (see
+       `us_market_holidays`), including floating ones like Good Friday.
+    4. ``broker_maintenance`` — starts at a recognized daily-close hour on a
+       weekday, and its size is within tolerance of that hour's typical
+       size — the same event recurring, not a fresh anomaly each day.
+    5. ``thin_liquidity_or_irregular_session`` (``SUSPICIOUS_GAP``) — small
+       (<= `suspicious_max_missing_bars`), not otherwise explained, not
+       blocking.
+    6. ``unexplained_missing_candles`` (``DATA_ERROR``) — anything else.
+       Fails closed: nothing here whitelists a gap it cannot actually
+       explain.
 
-    * ``EXPECTED_MARKET_GAP`` — a gap that starts on Friday afternoon/evening
-      and ends on Saturday, Sunday or Monday (the ordinary weekly close,
-      including a holiday long weekend); or overlaps a known market holiday
-      date; or recurs at the same UTC hour on enough other weekdays in this
-      same series to be the broker's daily rollover pause rather than 150
-      independent anomalies (checked against this series' own data, not a
-      hard-coded hour, since that hour is broker- and DST-dependent too).
-    * ``SUSPICIOUS_GAP`` — small (<= ``suspicious_max_missing_bars`` missing
-      bars), does not recur, not blocking — plausible thin liquidity, worth a
-      human glance.
-    * ``DATA_ERROR`` — anything else. Fails closed: a gap this function
-      cannot explain from the calendar or from its own recurrence is treated
-      as broken, not whitelisted.
-
-    Returns ``{"gaps": [...], "counts": {...}}``. Each gap entry carries its
-    boundary timestamps, weekday, size and the reason it was classified the
-    way it was, so a DATA_ERROR verdict can be audited row by row instead of
-    trusted blindly.
+    Returns ``{"gaps": [...], "counts": {...}, "daily_close_hours_utc": [...]}``.
+    Each gap entry carries its boundary timestamps (the *missing* window:
+    `gap_start_t` is the first missing bar's open, `gap_end_t` is when data
+    resumes), weekday, size, category and reason, so a DATA_ERROR verdict
+    can be audited row by row instead of trusted blindly.
     """
     span = duration(timeframe)
     gaps: List[Dict[str, Any]] = []
@@ -343,81 +451,79 @@ def classify_gaps(
         step = round((t - prev_t) / span)
         if step <= 1:
             continue
-        start_dt = datetime.fromtimestamp(prev_t, tz=timezone.utc)
-        end_dt = datetime.fromtimestamp(t, tz=timezone.utc)
+        missing = step - 1
+        gap_start_t = prev_t + span  # first missing bar's open == last present bar's close
+        gap_end_t = t                # data resumes here
+        start_dt = datetime.fromtimestamp(gap_start_t, tz=timezone.utc)
+        end_dt = datetime.fromtimestamp(gap_end_t, tz=timezone.utc)
         gaps.append({
-            "gap_start_t": prev_t,
-            "gap_end_t": t,
+            "gap_start_t": gap_start_t,
+            "gap_end_t": gap_end_t,
             "gap_start_utc": start_dt.isoformat(),
             "gap_end_utc": end_dt.isoformat(),
             "start_weekday": start_dt.weekday(),  # Monday = 0 .. Sunday = 6
             "end_weekday": end_dt.weekday(),
             "start_hour_utc": start_dt.hour,
-            "missing_bars": step - 1,
-            "duration_hours": round((t - prev_t) / 3600.0, 2),
+            "missing_bars": missing,
+            "duration_hours": round(missing * span / 3600.0, 2),
         })
+
+    daily_close_hours = _daily_close_hours(gaps, min_recurrence=min_daily_recurrence)
+    typical_at_hour = {
+        hour: _typical_missing_bars(gaps, hour, max_bars_for_typical=max_bars_for_typical_pause)
+        for hour in daily_close_hours
+    }
 
     # Pass 1: the weekly close.
     for g in gaps:
-        if (g["start_weekday"] == 4 and g["start_hour_utc"] >= _FRIDAY_CLOSE_EARLIEST_HOUR_UTC
-                and g["end_weekday"] in (5, 6, 0)):
+        at_close_hour = (g["start_hour_utc"] in daily_close_hours if daily_close_hours
+                          else g["start_hour_utc"] >= _FRIDAY_CLOSE_EARLIEST_HOUR_UTC)
+        if g["start_weekday"] == 4 and at_close_hour and g["end_weekday"] in (5, 6, 0):
             g["category"] = "EXPECTED_MARKET_GAP"
-            g["reason"] = "weekly close (Friday afternoon/evening -> weekend)"
+            g["reason"] = "weekly_close"
 
-    # Pass 2: named holidays, for the ones the weekly-close rule does not
-    # already cover (a holiday landing on a weekday).
+    # Pass 2: known holidays — catches what the weekly-close rule does not
+    # (a holiday landing on a weekday, or a closure that starts before
+    # Friday, e.g. the Thursday evening ahead of Good Friday).
     for g in gaps:
         if "category" in g:
             continue
-        day = datetime.fromtimestamp(g["gap_start_t"], tz=timezone.utc).date()
-        end_day = datetime.fromtimestamp(g["gap_end_t"], tz=timezone.utc).date()
-        overlap = False
-        while day <= end_day:
-            if (day.month, day.day) in KNOWN_MARKET_HOLIDAYS_MONTH_DAY:
-                overlap = True
-                break
-            day += timedelta(days=1)
-        if overlap:
+        if _overlaps_known_holiday(g["gap_start_t"], g["gap_end_t"]):
             g["category"] = "EXPECTED_MARKET_GAP"
-            g["reason"] = "known market holiday"
+            g["reason"] = "known_holiday"
 
-    # Pass 3: recurring daily pause, detected from this series' own data. A
-    # broker that pauses briefly every day for the daily rollover produces
-    # many small gaps clustered on the same UTC hour; that is one explained,
-    # recurring event, not one anomaly per day.
-    remaining = [g for g in gaps if "category" not in g]
-    weekday_remaining = [g for g in remaining if g["start_weekday"] < 5]
-    if weekday_remaining:
-        hour_counts = Counter(g["start_hour_utc"] for g in weekday_remaining)
-        dominant_hour, dominant_count = hour_counts.most_common(1)[0]
-        # A share threshold alone is vacuous on a handful of gaps — one
-        # isolated gap "dominates" its own hour 100% of the time. Recurrence
-        # needs to actually recur.
-        if (dominant_count >= 3
-                and dominant_count / len(weekday_remaining) >= daily_pause_share_threshold):
-            for g in weekday_remaining:
-                if (g["start_hour_utc"] == dominant_hour
-                        and g["missing_bars"] <= suspicious_max_missing_bars * 2):
-                    g["category"] = "EXPECTED_MARKET_GAP"
-                    g["reason"] = (
-                        f"recurring daily pause at {dominant_hour:02d}:00 UTC "
-                        f"({dominant_count}/{len(weekday_remaining)} weekday gaps land here)"
-                    )
+    # Pass 3: the broker's routine daily maintenance/session pause.
+    for g in gaps:
+        if "category" in g or g["start_weekday"] >= 5:
+            continue
+        hour = g["start_hour_utc"]
+        if hour not in daily_close_hours:
+            continue
+        typical = typical_at_hour.get(hour)
+        if typical is None:
+            continue
+        lo = typical * (1 - daily_pause_tolerance)
+        hi = typical * (1 + daily_pause_tolerance) + 1  # +1 bar of slack at small sizes
+        if lo <= g["missing_bars"] <= hi:
+            g["category"] = "EXPECTED_MARKET_GAP"
+            g["reason"] = "broker_maintenance"
+            g["detail"] = (f"~{typical:.0f} bars typical at {hour:02d}:00 UTC in this series")
 
-    # Pass 4: what is left is either small enough to be plausible thin
+    # Pass 4/5: what is left is either small enough to be plausible thin
     # liquidity, or genuinely unexplained.
     for g in gaps:
         if "category" in g:
             continue
         if g["missing_bars"] <= suspicious_max_missing_bars:
             g["category"] = "SUSPICIOUS_GAP"
-            g["reason"] = "small, non-recurring weekday gap — plausible thin liquidity"
+            g["reason"] = "thin_liquidity_or_irregular_session"
         else:
             g["category"] = "DATA_ERROR"
-            g["reason"] = (
-                "not the weekly close, not a known holiday, not a recurring daily "
-                "pause, and too large to be thin liquidity"
-            )
+            g["reason"] = "unexplained_missing_candles"
 
     counts = Counter(g["category"] for g in gaps)
-    return {"gaps": gaps, "counts": dict(counts)}
+    return {
+        "gaps": gaps,
+        "counts": dict(counts),
+        "daily_close_hours_utc": sorted(daily_close_hours),
+    }
