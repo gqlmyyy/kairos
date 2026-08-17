@@ -87,9 +87,14 @@ def last_closed_index(
     span = duration(timeframe)
     # A candle at index i is usable when t[i] + span <= at, i.e. t[i] <= at - span.
     # bisect_right over the open times finds the first candle past that bound.
+    #
+    # The `key=` form matters: materialising [float(c["t"]) for c in candles]
+    # here made the lookup O(n), and this is called once per decision bar, so
+    # building a 20,000-bar M15 dataset spent most of its time rebuilding the
+    # same timestamp list 20,000 times. With key= it is a genuine O(log n)
+    # search over the candles themselves.
     cutoff = float(at) - span
-    times = [float(c["t"]) for c in candles]
-    position = bisect.bisect_right(times, cutoff)
+    position = bisect.bisect_right(candles, cutoff, key=lambda c: float(c["t"]))
     return position - 1 if position > 0 else None
 
 
@@ -108,6 +113,33 @@ def closed_slice(
     return [] if index is None else list(candles[: index + 1])
 
 
+def closed_window(
+    candles: Sequence[Dict[str, Any]],
+    timeframe: str,
+    at: float,
+    size: int,
+) -> List[Dict[str, Any]]:
+    """The last `size` candles knowable at `at`, oldest first.
+
+    Identical guarantee to `closed_slice` — nothing that has not closed by
+    `at` can appear — but bounded in length. `closed_slice` copies the whole
+    prefix, so calling it once per decision bar is quadratic in the length of
+    the series: on 20,000 M15 bars that is ~200M element copies before a
+    single feature is computed. Every consumer here reads a bounded lookback
+    (indicators 100 bars, the ATR percentile 168), so handing them the whole
+    history was only ever waste.
+
+    Pass a `size` comfortably larger than the deepest lookback any consumer
+    needs; too small silently shortens an indicator's window rather than
+    raising, which is why callers state it explicitly.
+    """
+    index = last_closed_index(candles, timeframe, at)
+    if index is None:
+        return []
+    start = max(0, index + 1 - size)
+    return list(candles[start:index + 1])
+
+
 def next_executable_index(
     candles: Sequence[Dict[str, Any]],
     timeframe: str,
@@ -122,8 +154,7 @@ def next_executable_index(
     """
     if not candles:
         return None
-    times = [float(c["t"]) for c in candles]
-    position = bisect.bisect_left(times, float(at))
+    position = bisect.bisect_left(candles, float(at), key=lambda c: float(c["t"]))
     return position if position < len(candles) else None
 
 

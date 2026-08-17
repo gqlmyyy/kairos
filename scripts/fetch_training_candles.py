@@ -60,17 +60,30 @@ logger = get_logger("fetch_training_candles")
 
 OUT_DIR = os.path.join("data", "historical")
 
-# H4 drives labelling (the horizon is counted in H4 bars, matching how the
-# live trade-age layer counts). H1 supplies rsi/macd exactly as the live
-# snapshot does.
-TIMEFRAMES = ("H4", "H1")
+# H4 drives labelling for the established research track (the horizon is
+# counted in H4 bars, matching how the live trade-age layer counts). H1
+# supplies rsi/macd exactly as the live snapshot does. Neither is changed by
+# the M30 addition below.
+#
+# M30 is fetched for an INDEPENDENT research track. It does not feed, alter or
+# reinterpret the H4/H1 track, and no existing result derived from H4/H1
+# changes because of it. It is fetched for whatever symbols are requested, so
+# `--symbols XAUUSD` keeps the download to the one instrument under study.
+TIMEFRAMES = ("H4", "H1", "M30")
 
-# Bars per year, generous upper bounds (forex ~6 sessions/week).
-_BARS_PER_YEAR = {"H4": 1600, "H1": 6400}
+# Bars per year, following the convention already used here: bars-per-session
+# x sessions-per-year, rounded up so holidays and gaps cannot truncate the
+# request. The existing entries are H4 = 6 bars/day and H1 = 24 bars/day over
+# ~267 sessions; M30 is 48 bars/day on the same basis, giving ~12,800.
+_BARS_PER_YEAR = {"H4": 1600, "H1": 6400, "M30": 12800}
 
 
 def _mt5_timeframe(mt5, tf: str):
-    return {"H1": mt5.TIMEFRAME_H1, "H4": mt5.TIMEFRAME_H4}[tf]
+    return {
+        "M30": mt5.TIMEFRAME_M30,
+        "H1": mt5.TIMEFRAME_H1,
+        "H4": mt5.TIMEFRAME_H4,
+    }[tf]
 
 
 def fetch(symbol: str, timeframe: str, count: int) -> list:
