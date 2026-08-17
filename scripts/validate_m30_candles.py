@@ -130,7 +130,17 @@ def check_grid_and_structure(series, symbol: str) -> None:
              f"this series is not a clean single timeframe")
 
 
-def check_completed(series, symbol: str, manifest: dict) -> None:
+def check_completed(series, symbol: str, manifest: dict) -> list:
+    """Trim trailing candles that are not actually usable, and report.
+
+    A forming candle in the export is a reason to exclude it, not a reason
+    to fail Gate 1 outright: "If the exporter includes the currently forming
+    candle, remove/exclude it from validation rather than treating it as
+    completed" — the historical file itself is never touched, only the
+    in-memory view handed to everything below (field usability, gap
+    classification) is trimmed to what is actually usable. Returns that
+    trimmed series; callers must use it, not the original.
+    """
     section("3. COMPLETED CANDLES ONLY")
     name = f"{symbol}_{TIMEFRAME}"
 
@@ -149,24 +159,52 @@ def check_completed(series, symbol: str, manifest: dict) -> None:
             warn(f"cannot parse fetched_at: {fetched_at_raw!r}")
 
     now = datetime.now(timezone.utc).timestamp()
-    newest = float(series[-1]["t"])
+    usable = list(series)
+    excluded_now = excluded_stale = 0
+
+    while usable:
+        newest = float(usable[-1]["t"])
+        closes_at = ta.close_time(newest, TIMEFRAME)
+        if closes_at > now:
+            # Not knowable yet by any clock — cannot be used, full stop.
+            usable.pop()
+            excluded_now += 1
+            continue
+        if fetched_at is not None and closes_at > fetched_at:
+            # Closed by now, but was still forming AT EXPORT TIME, so the
+            # OHLC values MT5 handed back for it were provisional and may
+            # not match what the bar settled to. Excluded rather than
+            # trusted; fetch_training_candles.py's own filter (_closed_by)
+            # should prevent this from happening on a re-fetch.
+            usable.pop()
+            excluded_stale += 1
+            continue
+        break
+
+    if excluded_now:
+        warn(f"{name}: excluded {excluded_now} trailing candle(s) still forming as of "
+             f"validation time (real UTC now) — not passed to any check below")
+    if excluded_stale:
+        warn(f"{name}: excluded {excluded_stale} trailing candle(s) that were still "
+             f"forming when exported (their OHLC may be provisional) — re-run "
+             f"scripts/fetch_training_candles.py to get real closed values for them")
+
+    if not usable:
+        fail(f"{name}: every candle in this file is still forming or was provisional "
+             f"at export — nothing usable to validate")
+        return usable
+
+    newest = float(usable[-1]["t"])
     closes_at = ta.close_time(newest, TIMEFRAME)
-
-    if closes_at > now:
-        fail(f"{name}: newest bar opens {utc(newest)} and does not close until "
-             f"{utc(closes_at)} — a forming candle reached the export")
-        return
-
-    if fetched_at is not None and closes_at > fetched_at:
-        fail(f"{name}: newest bar closes {utc(closes_at)}, after the fetch at "
-             f"{utc(fetched_at)} — it was still forming when exported")
-    else:
-        ok(f"{name}: newest bar closed {utc(closes_at)}, before the fetch")
+    ok(f"{name}: newest usable bar closed {utc(closes_at)} — "
+       f"{len(usable)}/{len(series)} candles usable")
 
     dropped = entry.get("forming_candles_dropped")
     if dropped is not None:
-        ok(f"{name}: fetch_training_candles.py dropped {dropped} forming candle(s) "
-           f"at export time")
+        ok(f"{name}: fetch_training_candles.py itself dropped {dropped} forming "
+           f"candle(s) at export time")
+
+    return usable
 
 
 def check_fields(series, symbol: str) -> None:
@@ -215,13 +253,17 @@ def check_gaps(series, symbol: str) -> None:
     error_gaps = [g for g in gaps if g["category"] == "DATA_ERROR"]
     if error_gaps:
         fail(f"{name}: {len(error_gaps)} DATA_ERROR gaps — genuinely unexplained, "
-             f"listing every one below for audit:")
-        weekday_names = ("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+             f"full audit below (start, end, size, weekday/hour, and why each "
+             f"candidate session rule did NOT explain it):")
+        weekday_names = ta._WEEKDAY_NAMES
         for g in error_gaps:
-            print(f"    {g['gap_start_utc']} ({weekday_names[g['start_weekday']]}) -> "
-                  f"{g['gap_end_utc']} ({weekday_names[g['end_weekday']]})  "
-                  f"missing={g['missing_bars']} bars  {g['duration_hours']:.1f}h  "
-                  f"reason={g['reason']}")
+            print(f"\n    {g['gap_start_utc']} ({weekday_names[g['start_weekday']]}) -> "
+                  f"{g['gap_end_utc']} ({weekday_names[g['end_weekday']]})")
+            print(f"      missing={g['missing_bars']} bars   duration={g['duration_hours']:.1f}h"
+                  f"   stop={weekday_names[g['stop_weekday']]} {g['stop_hour_utc']:02d}:xx UTC"
+                  f"   classification={g['category']}   reason={g['reason']}")
+            for rule, verdict in g.get("rule_checks", {}).items():
+                print(f"        {rule:18s} {verdict}")
     else:
         ok(f"{name}: 0 DATA_ERROR gaps — every gap explained by the weekly close, a known "
            f"holiday, the broker's own recurring daily pause, or small enough to be "
@@ -257,9 +299,11 @@ def main() -> int:
             continue
 
         check_grid_and_structure(series, symbol)
-        check_completed(series, symbol, manifest)
-        check_fields(series, symbol)
-        check_gaps(series, symbol)
+        usable = check_completed(series, symbol, manifest)
+        if not usable:
+            continue
+        check_fields(usable, symbol)
+        check_gaps(usable, symbol)
 
     section("VERDICT")
     if failures:

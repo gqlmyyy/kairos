@@ -283,6 +283,63 @@ class TestClassifyGaps:
         result = ta.classify_gaps(candles, "M30")
         assert result["counts"] == {"EXPECTED_MARKET_GAP": 1}
 
+    def test_a_weekly_close_landing_exactly_on_the_midnight_boundary_is_accepted(self):
+        """Direct regression test for a real reported failure: a broker
+        whose Friday close lands exactly at 00:00 UTC produces a gap whose
+        FIRST MISSING bar is dated Saturday, not Friday — `gap_start_t`'s
+        own weekday is Saturday even though trading stopped on Friday. A
+        classifier keyed on that weekday alone misses every single instance
+        of this broker's weekly close. Classification here is keyed on
+        `stop_weekday` (the last PRESENT candle, unambiguously Friday) for
+        exactly this reason. 49 hours, Saturday 00:00 -> Monday 01:00 UTC,
+        is the exact real-world example reported."""
+        candles = m30_grid(
+            ts(2024, 1, 8), ts(2024, 1, 20),
+            skip_ranges=[(ts(2024, 1, 13, 0), ts(2024, 1, 15, 1))],  # Sat 00:00 -> Mon 01:00
+        )
+        result = ta.classify_gaps(candles, "M30")
+        assert result["counts"] == {"EXPECTED_MARKET_GAP": 1}
+        g = result["gaps"][0]
+        assert g["reason"] == "weekly_close"
+        assert g["start_weekday"] == 5  # Saturday, as reported — not Friday
+        assert g["stop_weekday"] == 4   # but the LAST TRADE was Friday
+
+    def test_a_dst_shifted_48_hour_variant_of_the_same_close_is_also_accepted(self):
+        """The exact same real-world pattern, one hour shorter (Saturday
+        00:00 -> Monday 00:00, 48h instead of 49h) — the classifier must not
+        care about the precise duration, only the weekday structure, or a
+        DST-driven one-hour shift in the reopen time reintroduces this bug
+        for half the year."""
+        candles = m30_grid(
+            ts(2024, 3, 4), ts(2024, 3, 16),
+            skip_ranges=[(ts(2024, 3, 9, 0), ts(2024, 3, 11, 0))],  # Sat 00:00 -> Mon 00:00
+        )
+        result = ta.classify_gaps(candles, "M30")
+        assert result["counts"] == {"EXPECTED_MARKET_GAP": 1}
+        assert result["gaps"][0]["reason"] == "weekly_close"
+
+    def test_reported_irregular_gaps_are_not_auto_whitelisted_by_a_nearby_recognized_hour(self):
+        """Direct regression test for the report's explicit warning: five
+        scattered, irregularly-sized real gaps must not be waved through
+        just because their hour happens to coincide with an otherwise
+        legitimate, tightly-consistent recurring pause. Reproduces one verbatim
+        (2026-02-26 22:00 -> 2026-02-27 03:00, 5h/10 bars) against a backdrop
+        where 22:00 UTC is a real, tightly-consistent 2-bar daily pause — the
+        outlier's size (10 bars) is far outside that hour's tolerance band, so
+        it must still fail closed."""
+        days = weekdays(2026, 2, 2, 20)
+        routine = [(ts(d.year, d.month, d.day, 22, 0), ts(d.year, d.month, d.day, 22, 0) + 2 * 1800.0)
+                   for d in days if not (d.year == 2026 and d.month == 2 and d.day == 26)]
+        outlier = [(ts(2026, 2, 26, 22, 0), ts(2026, 2, 27, 3, 0))]
+        candles = m30_grid(ts(2026, 2, 1), ts(2026, 3, 5), skip_ranges=routine + outlier)
+        result = ta.classify_gaps(candles, "M30", min_daily_recurrence=10)
+        outlier_gaps = [g for g in result["gaps"] if g["missing_bars"] == 10]
+        assert len(outlier_gaps) == 1
+        assert outlier_gaps[0]["category"] == "DATA_ERROR"
+        assert outlier_gaps[0]["reason"] == "unexplained_missing_candles"
+        # and the audit trail explains exactly why, not just that it failed
+        assert "outside tolerance" in outlier_gaps[0]["rule_checks"]["broker_maintenance"]
+
     def test_a_named_holiday_on_a_weekday_is_accepted(self):
         """Christmas Day 2024 is a Wednesday — not caught by the weekly-close
         rule, so it must be caught by the calendar-holiday rule instead."""
