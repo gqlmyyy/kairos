@@ -975,3 +975,103 @@ now correctly explains the old M1 gaps instead of a bogus 2026 timestamp,
 and read the full tick diagnostics for the three active gaps. Share the
 output back — five `UNKNOWN` results, honestly reported with rich evidence
 attached, is a legitimate outcome, not a failure of the investigation.
+
+---
+
+## Round 7 — multi-timeframe probe, full tick forensics, machine-readable summary
+
+The confirmed round-6 evidence — `M30=0`, `M1=0` for all five gaps, and
+three of them (1,073 / 6,565 / 86,205 ticks) with real tick activity — was
+still only being reported, not properly analyzed. This round adds the
+independent cross-timeframe evidence needed to actually reason about it,
+without drawing a conclusion the evidence doesn't support.
+
+### What was added, `scripts/audit_xauusd_m30_gaps.py` only (plus its tests)
+
+* **Tighter 2h-margin tick query** (`PROBE_MARGIN`), replacing the old
+  24h-margin tick window — the brief's explicit spec. M30/M1 keep the 24h
+  margin for boundary context; only ticks and the new probe use 2h.
+* **Full tick forensics**: first/last tick timestamp inside the gap,
+  count, ticks/hour, offset from gap start and end, a 3-tick sample from
+  each end.
+* **`analyze_tick_continuity()`**: classifies tick activity as
+  `DISTRIBUTED_THROUGH_GAP`, `CONCENTRATED_AT_BOUNDARY`,
+  `TOO_FEW_TO_ASSESS`, or `NONE` (share of ticks in the first/middle/last
+  10-80-10% of the gap), plus unique-vs-duplicate timestamp counts and
+  bid/ask field presence — diagnostic only, never drives CONCLUSION.
+* **`probe_all_timeframes()`**: an independent M1/M5/M15/M30/H1 query for
+  every gap, each with its own range validation, bar-density percentage
+  (reference only — a closed session legitimately has 0%), and
+  before/after boundary bars.
+* **`classify_evidence_state()`**: a distinct, coarser tag —
+  `TICKS_PRESENT_BARS_ABSENT`, `BARS_PRESENT_SOME_TIMEFRAME`,
+  `NO_ACTIVITY`, or `AMBIGUOUS` — separate from the 5-way
+  CONCLUSION/CONFIDENCE classification, exactly matching the brief's
+  requirement that this be an evidence category, not a Gate 1-style
+  verdict. Structurally incapable of feeding `BROKER_SESSION_GAP` or
+  `FETCH_PIPELINE_FAILURE`.
+* **`assert_in_window()`**: a hard runtime assertion on every before/after
+  record this script prints — not just a filter, a guarantee. The
+  2026-05-01 bug from round 6 is now structurally impossible to redisplay,
+  not merely unlikely.
+* **`raw_kind`** (`"none"` / `"empty"` / `"data"`) on every M30/M1/tick
+  query result — the API returning `None` (a failure) is no longer folded
+  into the same bucket as it returning `[]` (success, nothing found).
+* **`--gap-index N`** (1-5) to audit a single reported gap in isolation.
+* **Machine-readable JSON summary**, one line per gap, exactly the schema
+  requested: `ticks_inside`, `m1_inside` .. `h1_inside`, `evidence`,
+  `conclusion`, `confidence`.
+* Session-unavailable reporting now states the exact reason verbatim:
+  `"MetaTrader5 Python package does not expose symbol_info_session_trade"`.
+
+### Tests
+
+`tests/test_audit_xauusd_m30_gaps.py`: **60 tests** (up from 38). New
+coverage: None-vs-empty-array distinguished for both M30 and ticks,
+`TICKS_PRESENT_BARS_ABSENT`/`BARS_PRESENT_SOME_TIMEFRAME`/`NO_ACTIVITY`
+all independently verified (including as a pure function of
+`classify_evidence_state`'s own inputs), tick-continuity patterns
+(distributed / concentrated / too-few / none) with fixture math, bid/ask
+and duplicate-timestamp detection, `assert_in_window` raising on an
+out-of-range timestamp and *not* raising for a normal gap's full
+`print_report()` run, an unsupported timeframe (no `TIMEFRAME_M5`
+constant) reported rather than crashing, and `--gap-index`'s mutual
+exclusivity with `--start`/out-of-range rejection/correct gap selection.
+
+### Test results, round 7
+
+`pytest -q`: **1015 passed**, 1 pre-existing unrelated failure (unchanged).
+
+### Still no calendar rule change
+
+`classify_gaps()` untouched. The new evidence — rich as it now is for the
+three active gaps — still does not meet the brief's own bar for touching
+the calendar model: no session source exists on this MT5 package to
+directly confirm a closure, so `BROKER_SESSION_GAP` remains structurally
+unreachable, and `TICKS_PRESENT_BARS_ABSENT` is explicitly defined to
+never auto-resolve into a conclusion.
+
+### Files changed, round 7
+
+* `scripts/audit_xauusd_m30_gaps.py` — additions above.
+* `tests/test_audit_xauusd_m30_gaps.py` — 60 tests.
+* This report.
+
+Not touched (same as every prior round): `scripts/validate_m30_candles.py`,
+`classify_gaps()` or any other part of
+`analysis/features/timeframe_alignment.py`,
+`data/historical/XAUUSD_M30.json`, `fetch_training_candles.py`, any model,
+training, or feature-spec code.
+
+### Next step
+
+```bash
+git pull
+python scripts/audit_xauusd_m30_gaps.py --symbol XAUUSD
+```
+
+Read, per gap: the TICK CONTINUITY pattern (distributed vs a boundary
+artifact), the MULTI-TIMEFRAME PROBE row for every timeframe, and the
+EVIDENCE_STATE line. Then check the final JSON summary lines — those are
+what should be shared back for a final root-cause decision. Do not proceed
+to Gate 2 until that decision is made from real evidence.

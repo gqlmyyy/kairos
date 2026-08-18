@@ -35,6 +35,31 @@ Two rounds of real runs against a live terminal (package 5.0.5735, build
    coverage anywhere in the 48h audit window, as distinct from a genuine,
    corroborated absence inside just the gap.
 
+A third real run found real tick activity (1,073 / 6,565 / 86,205 ticks) on
+three of the five gaps while every bar timeframe (M1/M5/M15/M30/H1) reports
+zero. That evidence needed real handling, not a bare count, so this adds:
+
+3. A tighter 2h-margin tick query (`PROBE_MARGIN`), full tick forensics
+   (first/last timestamp, count, ticks/hour, boundary offsets, a 3-tick
+   sample from each end) and `analyze_tick_continuity` — is the activity
+   spread through the gap or an isolated boundary artifact?
+4. An independent probe of every timeframe MT5 exposes (`probe_all_timeframes`,
+   M1/M5/M15/M30/H1) over the same 2h-margin window, with a diagnostic-only
+   bar-density percentage. `classify_evidence_state` derives a coarse,
+   separate evidence tag — `TICKS_PRESENT_BARS_ABSENT`,
+   `BARS_PRESENT_SOME_TIMEFRAME`, `NO_ACTIVITY`, or `AMBIGUOUS` — from
+   this, structurally incapable of resolving to `BROKER_SESSION_GAP` or
+   `FETCH_PIPELINE_FAILURE` by itself: it is an evidence state, not a
+   conclusion.
+5. `assert_in_window` — a hard runtime check on every before/after record
+   this script displays, so a stale or out-of-range timestamp cannot be
+   printed as if it belonged to the requested window ever again, not just
+   filtered out by convention.
+6. `raw_kind` ("none" | "empty" | "data") on every M30/M1/tick query result,
+   so the API returning `None` (a query failure) is never folded into the
+   same bucket as it returning `[]` (a successful query, genuinely nothing
+   found).
+
 API compatibility
 ------------------
 Nothing here assumes an MT5 API beyond what `dir(mt5)` / `hasattr` confirm
@@ -51,8 +76,12 @@ Usage::
 
     python scripts/audit_xauusd_m30_gaps.py
     python scripts/audit_xauusd_m30_gaps.py --symbol XAUUSD --candles data/historical
+    python scripts/audit_xauusd_m30_gaps.py --gap-index 3
     python scripts/audit_xauusd_m30_gaps.py --start "2025-07-03T03:30:00+00:00" \
         --end "2025-07-03T12:00:00+00:00"
+
+Ends with one machine-readable JSON line per gap (ticks/M1/M5/M15/M30/H1
+bar counts inside the gap, evidence category, conclusion, confidence).
 """
 
 from __future__ import annotations
@@ -79,8 +108,18 @@ REPORTED_GAPS = [
 ]
 
 MARGIN = timedelta(hours=24)
+
+# Ticks and the multi-timeframe bar probe use a tighter 2h margin, per the
+# brief: a 24h window is the right size for M30/M1 boundary context, but a
+# narrower, gap-focused window is what the tick and cross-timeframe
+# forensics actually need.
+PROBE_MARGIN = timedelta(hours=2)
+PROBE_TIMEFRAMES = ("M1", "M5", "M15", "M30", "H1")
+
 CONCLUSIONS = ("BROKER_SESSION_GAP", "FETCH_PIPELINE_FAILURE",
                "HISTORICAL_FILE_CORRUPTION", "CALENDAR_RULE_MISMATCH", "UNKNOWN")
+EVIDENCE_STATES = ("TICKS_PRESENT_BARS_ABSENT", "BARS_PRESENT_SOME_TIMEFRAME",
+                    "NO_ACTIVITY", "AMBIGUOUS")
 
 
 def _naive_utc(dt: datetime) -> datetime:
@@ -200,25 +239,37 @@ def _validate_range(rows: list, window_start: datetime, window_end: datetime,
 
 
 def fetch_mt5_range(mt5, symbol: str, mt5_timeframe, start: datetime, end: datetime) -> dict:
-    """Range-validated M30/M1 query. Returns a `_validate_range` result plus
-    `last_error` captured immediately after the call, per-query, not just
-    once at connection time."""
+    """Range-validated M30/M1/... query. Returns a `_validate_range` result
+    plus `last_error` captured immediately after the call, per-query, not
+    just once at connection time, and `raw_kind` — "none" | "empty" |
+    "data" — so an API returning `None` (a query-level failure) is never
+    silently folded into the same bucket as an API returning `[]` (a
+    successful query that legitimately found nothing)."""
     rates = mt5.copy_rates_range(symbol, mt5_timeframe, _naive_utc(start), _naive_utc(end))
     error = mt5.last_error()
-    rows = [] if rates is None else list(rates)
+    if rates is None:
+        raw_kind, rows = "none", []
+    else:
+        rows = list(rates)
+        raw_kind = "empty" if not rows else "data"
     result = _validate_range(rows, start, end, lambda r: float(r["time"]))
     result["last_error"] = error
+    result["raw_kind"] = raw_kind
     return result
 
 
 def fetch_mt5_ticks(mt5, symbol: str, start: datetime, end: datetime) -> dict:
     """Range-validated tick query. Returns {"valid", "violation",
-    "returned_first", "returned_last", "raw_count", "status", "error",
-    "last_error"}. `status` is "OK", "ERROR", or "UNSUPPORTED" — a failed or
-    absent query is never reinterpreted as "zero ticks exist"."""
+    "returned_first", "returned_last", "raw_count", "raw_kind", "status",
+    "error", "last_error"}. `status` is "OK", "ERROR", or "UNSUPPORTED" — a
+    failed or absent query is never reinterpreted as "zero ticks exist".
+    `raw_kind` distinguishes the API returning `None` (query failure) from
+    returning `[]` (a successful query, genuinely no ticks) — per the
+    brief, these must never be silently folded together."""
     if not hasattr(mt5, "copy_ticks_range"):
         return {"valid": [], "violation": False, "returned_first": None, "returned_last": None,
-                "raw_count": 0, "status": "UNSUPPORTED", "error": None, "last_error": None}
+                "raw_count": 0, "raw_kind": "unsupported", "status": "UNSUPPORTED",
+                "error": None, "last_error": None}
     flag = getattr(mt5, "COPY_TICKS_ALL", None)
     try:
         if flag is None:
@@ -228,12 +279,15 @@ def fetch_mt5_ticks(mt5, symbol: str, start: datetime, end: datetime) -> dict:
         error = mt5.last_error()
     except Exception as exc:  # pragma: no cover - depends on live terminal
         return {"valid": [], "violation": False, "returned_first": None, "returned_last": None,
-                "raw_count": 0, "status": "ERROR", "error": str(exc), "last_error": None}
+                "raw_count": 0, "raw_kind": "exception", "status": "ERROR",
+                "error": str(exc), "last_error": None}
     if ticks is None:
         return {"valid": [], "violation": False, "returned_first": None, "returned_last": None,
-                "raw_count": 0, "status": "ERROR", "error": str(error), "last_error": error}
+                "raw_count": 0, "raw_kind": "none", "status": "ERROR",
+                "error": str(error), "last_error": error}
     rows = list(ticks)
     result = _validate_range(rows, start, end, tick_epoch)
+    result["raw_kind"] = "empty" if not rows else "data"
     result["status"] = "OK"
     result["error"] = None
     result["last_error"] = error
@@ -262,13 +316,17 @@ def query_session_evidence(mt5, symbol: str, start: datetime, end: datetime) -> 
     """
     candidates = detect_session_api(mt5)
     if not candidates:
+        # detect_session_api() already covers symbol_info_session_trade (it
+        # contains "session"), so an empty `candidates` means specifically
+        # that it — and everything else session-named — is absent.
+        reason = "MetaTrader5 Python package does not expose symbol_info_session_trade"
         return {
             "status": "SESSION_METADATA_UNAVAILABLE",
             "source": None,
+            "reason": reason,
             "details": (
-                "no attribute containing 'session' found on the installed MetaTrader5 "
-                f"module (mt5.version()={mt5.version()}) — symbol_info_session_trade, "
-                "in particular, does not exist in this package"
+                f"no attribute containing 'session' found on the installed MetaTrader5 "
+                f"module (mt5.version()={mt5.version()}); {reason}"
             ),
             "confirms_closed": None,
         }
@@ -291,6 +349,7 @@ def query_session_evidence(mt5, symbol: str, start: datetime, end: datetime) -> 
     return {
         "status": "SESSION_METADATA_QUERIED",
         "source": candidates,
+        "reason": f"found session-named attribute(s) {candidates}, queried but not interpreted",
         "details": raw,
         # Deliberately None, not True/False: no interpreter for an unnamed,
         # never-before-seen API is written here. See docstring above.
@@ -340,8 +399,131 @@ def synthetic_ohlc_from_ticks(ticks: list, *, minute_span: int = 1) -> list:
 
 
 # ---------------------------------------------------------------------------
+# Independent multi-timeframe probe (M1/M5/M15/M30/H1) — is the absence
+# specific to M30, or does every timeframe agree?
+# ---------------------------------------------------------------------------
+
+def probe_timeframe(mt5, symbol: str, tf_name: str, start: datetime, end: datetime) -> dict:
+    """Range-validated query for one timeframe over [start-PROBE_MARGIN,
+    end+PROBE_MARGIN], plus a diagnostic-only bar-density percentage
+    against the gap's own grid point count. Density is NEVER used for
+    classification — a closed session legitimately has 0%."""
+    mt5_tf = getattr(mt5, f"TIMEFRAME_{tf_name}", None)
+    if mt5_tf is None:
+        return {"timeframe": tf_name, "supported": False}
+
+    window_start, window_end = start - PROBE_MARGIN, end + PROBE_MARGIN
+    q = fetch_mt5_range(mt5, symbol, mt5_tf, window_start, window_end)
+    valid = q["valid"]
+    before = [r for r in valid if float(r["time"]) < start.timestamp()]
+    after = [r for r in valid if float(r["time"]) >= end.timestamp()]
+    in_gap = [r for r in valid if start.timestamp() <= float(r["time"]) < end.timestamp()]
+
+    minutes = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60}[tf_name]
+    expected = number_of_grid_points(start, end, minutes)
+    density_pct = (100.0 * len(in_gap) / expected) if expected else None
+
+    return {
+        "timeframe": tf_name, "supported": True, "query": q,
+        "bars_in_gap": len(in_gap), "bars_before": len(before), "bars_after": len(after),
+        "first_before": _boundary_bar(before, closest_to="start"),
+        "first_after": _boundary_bar(after, closest_to="end"),
+        "expected_grid_points": expected, "density_pct": density_pct,
+        "window_start": window_start, "window_end": window_end,
+    }
+
+
+def probe_all_timeframes(mt5, symbol: str, start: datetime, end: datetime) -> dict:
+    return {tf: probe_timeframe(mt5, symbol, tf, start, end) for tf in PROBE_TIMEFRAMES}
+
+
+def classify_evidence_state(ticks_in_gap_count: int, probe: dict) -> str:
+    """A distinct, coarser tag from `conclusion` — per the brief's
+    machine-readable summary schema. Never used to drive the main 5-way
+    CONCLUSION/CONFIDENCE classification above; it exists so the JSON
+    summary can flag "ticks exist but nothing aggregated them" as its own
+    evidence category, separate from whatever root cause that eventually
+    turns out to have."""
+    any_bars = any(p.get("supported") and p["bars_in_gap"] > 0 for p in probe.values())
+    if ticks_in_gap_count > 0 and not any_bars:
+        return "TICKS_PRESENT_BARS_ABSENT"
+    if any_bars:
+        return "BARS_PRESENT_SOME_TIMEFRAME"
+    if ticks_in_gap_count == 0 and not any_bars:
+        return "NO_ACTIVITY"
+    return "AMBIGUOUS"
+
+
+# ---------------------------------------------------------------------------
+# Tick continuity analysis — distributed through the gap, or a boundary
+# artifact?
+# ---------------------------------------------------------------------------
+
+def analyze_tick_continuity(ticks_in_gap: list, gap_start: datetime, gap_end: datetime) -> dict:
+    """Distinguishes (A) genuine activity spread through the gap from (B)
+    an isolated cluster near one edge (a boundary artifact — ticks that
+    arguably belong to the adjacent, present period) from (C) too few
+    ticks to say either way. Diagnostic only; never drives CONCLUSION."""
+    if not ticks_in_gap:
+        return {"pattern": "NONE", "unique_timestamps": 0, "has_bid": False, "has_ask": False}
+
+    epochs = sorted(tick_epoch(t) for t in ticks_in_gap)
+    gap_seconds = max((gap_end - gap_start).total_seconds(), 1e-9)
+    # Where in [0, 1] does each tick fall within the gap?
+    positions = [(e - gap_start.timestamp()) / gap_seconds for e in epochs]
+    early = sum(1 for p in positions if p < 0.1)
+    late = sum(1 for p in positions if p > 0.9)
+    middle = len(positions) - early - late
+
+    if len(positions) < 5:
+        pattern = "TOO_FEW_TO_ASSESS"
+    elif middle == 0 and (early > 0 or late > 0):
+        pattern = "CONCENTRATED_AT_BOUNDARY"
+    elif middle > 0:
+        pattern = "DISTRIBUTED_THROUGH_GAP"
+    else:
+        pattern = "AMBIGUOUS"
+
+    unique_timestamps = len({round(e, 3) for e in epochs})
+
+    def _has_field(rows, field):
+        for row in rows:
+            try:
+                if float(row[field]) != 0.0:
+                    return True
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+        return False
+
+    has_bid = _has_field(ticks_in_gap, "bid")
+    has_ask = _has_field(ticks_in_gap, "ask")
+
+    return {
+        "pattern": pattern,
+        "share_first_10pct": round(early / len(positions), 3),
+        "share_last_10pct": round(late / len(positions), 3),
+        "share_middle_80pct": round(middle / len(positions), 3),
+        "unique_timestamps": unique_timestamps,
+        "duplicate_timestamps": len(epochs) - unique_timestamps,
+        "has_bid": has_bid, "has_ask": has_ask,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Per-gap audit
 # ---------------------------------------------------------------------------
+
+def assert_in_window(epoch: float, window_start: datetime, window_end: datetime, label: str) -> None:
+    """Hard structural guarantee, not just a filter: anything this script
+    displays as belonging to a requested window MUST actually be in it.
+    Raises loudly rather than ever silently printing a 2026-05-01 bar for a
+    2024-01-15 request again."""
+    lo, hi = window_start.timestamp(), window_end.timestamp()
+    assert lo <= epoch < hi, (
+        f"{label}: timestamp {_iso(epoch)} is outside the requested window "
+        f"[{window_start.isoformat()}, {window_end.isoformat()}) — this must never be "
+        f"displayed as belonging to it")
+
 
 def _boundary_bar(bars: list, *, closest_to: str):
     """The single bar in `bars` nearest the gap boundary."""
@@ -388,14 +570,18 @@ def audit_one_gap(mt5, symbol: str, start: datetime, end: datetime, historical: 
     # for this period, not that the market was quiet.
     m1_status = "M1_HISTORY_UNAVAILABLE" if (m1["violation"] or not m1_valid) else "OK"
 
-    # ---- Ticks --------------------------------------------------------
-    ticks = fetch_mt5_ticks(mt5, symbol, window_start, window_end)
+    # ---- Ticks ----------------------------------------------------------
+    # A tighter 2h margin than M30/M1's 24h — the brief's explicit window
+    # for tick forensics specifically.
+    tick_window_start, tick_window_end = start - PROBE_MARGIN, end + PROBE_MARGIN
+    ticks = fetch_mt5_ticks(mt5, symbol, tick_window_start, tick_window_end)
     ticks_valid = ticks["valid"]
     ticks_before = [t for t in ticks_valid if tick_epoch(t) < start.timestamp()]
     ticks_after = [t for t in ticks_valid if tick_epoch(t) >= end.timestamp()]
     ticks_in_gap = sorted(
         [t for t in ticks_valid if start.timestamp() <= tick_epoch(t) < end.timestamp()],
         key=tick_epoch)
+    tick_continuity = analyze_tick_continuity(ticks_in_gap, start, end)
 
     tick_diagnostics = None
     if ticks_in_gap:
@@ -431,6 +617,10 @@ def audit_one_gap(mt5, symbol: str, start: datetime, end: datetime, historical: 
     historical_only_in_gap = sorted(hist_ts_in_gap - mt5_ts_in_gap)
 
     session = query_session_evidence(mt5, symbol, start, end)
+
+    # ---- Independent multi-timeframe probe (M1/M5/M15/M30/H1) -----------
+    probe = probe_all_timeframes(mt5, symbol, start, end)
+    evidence_state = classify_evidence_state(len(ticks_in_gap), probe)
 
     # ---- Classification (conservative, evidence-gated) ----------------
     evidence = []
@@ -536,6 +726,8 @@ def audit_one_gap(mt5, symbol: str, start: datetime, end: datetime, historical: 
         "ticks_after": len(ticks_after),
         "tick_diagnostics": tick_diagnostics,
         "tick_activity_without_m30": tick_activity_without_m30,
+        "tick_continuity": tick_continuity,
+        "tick_window_start": tick_window_start, "tick_window_end": tick_window_end,
         "synthetic_from_ticks": synthetic,
         "hist_bars_in_gap": len(hist_in_gap),
         "matching_timestamps": len(matching),
@@ -546,6 +738,8 @@ def audit_one_gap(mt5, symbol: str, start: datetime, end: datetime, historical: 
         "expected_m30_grid_points": number_of_grid_points(start, end, 30),
         "expected_m1_grid_points": number_of_grid_points(start, end, 1),
         "session": session,
+        "probe": probe,
+        "evidence_state": evidence_state,
         "evidence": evidence,
         "conclusion": conclusion,
         "confidence": confidence,
@@ -570,6 +764,7 @@ def print_report(index: int, result: dict, connection: dict) -> None:
     print(f"  symbol: {connection['symbol']} (visible={connection['symbol_visible']})")
     print(f"  last_error: {connection['last_error']}")
 
+    window_start_24h, window_end_24h = result["start"] - MARGIN, result["end"] + MARGIN
     for label, key_bars, key_before, key_after, key_first_before, key_first_after, query in (
         ("M30", "m30_bars_in_gap", "m30_bars_before", "m30_bars_after",
          "m30_first_before", "m30_first_after", result["m30_query"]),
@@ -577,8 +772,10 @@ def print_report(index: int, result: dict, connection: dict) -> None:
          "m1_first_before", "m1_first_after", result["m1_query"]),
     ):
         print(f"\n{label}:")
-        print(f"  requested_start: {result['start'].isoformat() if label == 'M30' else result['start'].isoformat()}")
+        print(f"  requested_start: {result['start'].isoformat()}")
         print(f"  requested_end:   {result['end'].isoformat()}")
+        print(f"  raw_kind: {query.get('raw_kind')}  (none = API returned None; empty = API "
+              f"returned [] successfully; data = at least one row returned)")
         print(f"  returned_first (raw, pre-validation): {_iso(query['returned_first'])}")
         print(f"  returned_last  (raw, pre-validation): {_iso(query['returned_last'])}")
         print(f"  QUERY_RANGE_VIOLATION: {query['violation']}")
@@ -588,18 +785,27 @@ def print_report(index: int, result: dict, connection: dict) -> None:
         print(f"  bars_in_gap: {result[key_bars]}")
         print(f"  bars_before: {result[key_before]}")
         print(f"  bars_after:  {result[key_after]}")
+        for bar_key, bar in ((key_first_before, result[key_first_before]),
+                              (key_first_after, result[key_first_after])):
+            if bar is not None:
+                assert_in_window(float(bar["time"]), window_start_24h, window_end_24h,
+                                  f"{label}.{bar_key}")
         print(f"  first_before: {_bar_summary(result[key_first_before])}")
         print(f"  first_after:  {_bar_summary(result[key_first_after])}")
 
     print("\nTICKS:")
     tq = result["tick_query"]
+    print(f"  requested window (2h margin): [{result['tick_window_start'].isoformat()}, "
+          f"{result['tick_window_end'].isoformat()})")
     print(f"  status: {result['tick_status']}" + (f"  error={result['tick_error']}" if result['tick_error'] else ""))
+    print(f"  raw_kind: {tq.get('raw_kind')}  (none = API returned None; empty = API returned "
+          f"[] successfully; data = at least one tick returned)")
     print(f"  returned_first (raw): {_iso(tq['returned_first'])}")
     print(f"  returned_last  (raw): {_iso(tq['returned_last'])}")
     print(f"  QUERY_RANGE_VIOLATION: {tq['violation']}")
     print(f"  ticks_in_gap: {result['ticks_in_gap']}")
-    print(f"  ticks_before: {result['ticks_before']}")
-    print(f"  ticks_after:  {result['ticks_after']}")
+    print(f"  ticks_in_2h_pre_gap: {result['ticks_before']}")
+    print(f"  ticks_in_2h_post_gap: {result['ticks_after']}")
     if result["tick_diagnostics"]:
         d = result["tick_diagnostics"]
         print(f"  first_tick_in_gap: {_iso(d['first_tick'])}")
@@ -619,6 +825,36 @@ def print_report(index: int, result: dict, connection: dict) -> None:
                   f"{_iso(first['t'])} .. {_iso(last['t'])}, "
                   f"price range [{min(b['low'] for b in result['synthetic_from_ticks']):.3f}, "
                   f"{max(b['high'] for b in result['synthetic_from_ticks']):.3f}]")
+
+    print("\nTICK CONTINUITY (diagnostic only, does not drive CONCLUSION):")
+    tc = result["tick_continuity"]
+    print(f"  pattern: {tc['pattern']}")
+    if tc["pattern"] != "NONE":
+        print(f"  share in first 10% of gap: {tc['share_first_10pct']:.1%}")
+        print(f"  share in middle 80% of gap: {tc['share_middle_80pct']:.1%}")
+        print(f"  share in last 10% of gap: {tc['share_last_10pct']:.1%}")
+        print(f"  unique_timestamps: {tc['unique_timestamps']}  "
+              f"duplicate_timestamps: {tc['duplicate_timestamps']}")
+        print(f"  has_bid: {tc['has_bid']}  has_ask: {tc['has_ask']}")
+
+    print("\nMULTI-TIMEFRAME PROBE (M1/M5/M15/M30/H1, independent of the M30/M1 sections above, "
+          "2h margin):")
+    for tf in PROBE_TIMEFRAMES:
+        p = result["probe"][tf]
+        if not p.get("supported"):
+            print(f"  {tf}: not supported by this MT5 package (no TIMEFRAME_{tf} constant)")
+            continue
+        density = f"{p['density_pct']:.1f}%" if p["density_pct"] is not None else "n/a"
+        for bar_key, bar in (("first_before", p["first_before"]), ("first_after", p["first_after"])):
+            if bar is not None:
+                assert_in_window(float(bar["time"]), p["window_start"], p["window_end"],
+                                  f"probe.{tf}.{bar_key}")
+        print(f"  {tf}: bars_in_gap={p['bars_in_gap']}  bars_before={p['bars_before']}  "
+              f"bars_after={p['bars_after']}  expected_grid_points={p['expected_grid_points']} "
+              f"(reference only)  density={density}  "
+              f"QUERY_RANGE_VIOLATION={p['query']['violation']}")
+    print(f"\n  EVIDENCE_STATE: {result['evidence_state']} "
+          f"(evidence category, distinct from CONCLUSION below)")
 
     print("\nHISTORICAL FILE:")
     print(f"  bars_in_gap: {result['hist_bars_in_gap']}")
@@ -651,7 +887,14 @@ def main() -> int:
     parser.add_argument("--candles", default=os.path.join("data", "historical"))
     parser.add_argument("--start", help="ISO8601 UTC; audits one gap instead of the reported five")
     parser.add_argument("--end", help="ISO8601 UTC; required with --start")
+    parser.add_argument("--gap-index", type=int, choices=range(1, len(REPORTED_GAPS) + 1),
+                        help=f"audit only REPORTED_GAPS[N] (1..{len(REPORTED_GAPS)}) instead of "
+                             f"all five; mutually exclusive with --start/--end")
     args = parser.parse_args()
+
+    if args.gap_index and args.start:
+        print("ERROR: --gap-index and --start are mutually exclusive")
+        return 1
 
     print("READ-ONLY AUDIT")
     print("No historical file modified.")
@@ -691,6 +934,8 @@ def main() -> int:
                 print("ERROR: --end is required with --start")
                 return 1
             gaps = [(datetime.fromisoformat(args.start), datetime.fromisoformat(args.end))]
+        elif args.gap_index:
+            gaps = [REPORTED_GAPS[args.gap_index - 1]]
         else:
             gaps = REPORTED_GAPS
 
@@ -726,6 +971,25 @@ def main() -> int:
         tick_without_m30 = sum(1 for r in results if r["tick_activity_without_m30"])
         print(f"TICK_ACTIVITY_WITHOUT_M30 (evidence state, not a conclusion): "
               f"{tick_without_m30}/{len(results)} gap(s)")
+
+        print("\n" + "=" * 60)
+        print("MACHINE-READABLE SUMMARY (one JSON object per line)")
+        print("=" * 60)
+        for r in results:
+            summary = {
+                "gap": f"{r['start'].isoformat()} -> {r['end'].isoformat()}",
+                "ticks_inside": r["ticks_in_gap"],
+                "m1_inside": r["probe"]["M1"]["bars_in_gap"] if r["probe"]["M1"]["supported"] else None,
+                "m5_inside": r["probe"]["M5"]["bars_in_gap"] if r["probe"]["M5"]["supported"] else None,
+                "m15_inside": r["probe"]["M15"]["bars_in_gap"] if r["probe"]["M15"]["supported"] else None,
+                "m30_inside": r["probe"]["M30"]["bars_in_gap"] if r["probe"]["M30"]["supported"] else None,
+                "h1_inside": r["probe"]["H1"]["bars_in_gap"] if r["probe"]["H1"]["supported"] else None,
+                "evidence": r["evidence_state"],
+                "conclusion": r["conclusion"],
+                "confidence": r["confidence"],
+            }
+            print(json.dumps(summary))
+
         print("\nNo file was modified. No calendar rule was changed. This is evidence only.")
         return 0
     finally:
