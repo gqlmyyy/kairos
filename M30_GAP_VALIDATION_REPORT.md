@@ -857,3 +857,121 @@ Per the brief: do not change the validator or calendar rules based on
 assumptions. Share the output back either way, including if every gap
 still lands as `UNKNOWN` — that is a valid, honest result, not a failure
 of the tool.
+
+---
+
+## Round 6 — a second real bug found by actually running it: M1 range violation
+
+The corrected round-5 audit was run against the live terminal. Two things
+came back:
+
+1. **`M30=0`, `M1=0` confirmed for all five gaps** — consistent with round 5.
+2. **Three of the five gaps have real tick activity**: 1,073 ticks
+   (2025-07-03), 6,565 ticks (2025-10-23), and **86,205 ticks**
+   (2026-02-26) — all while MT5 reports zero M30 bars for the same window.
+3. **A second real bug**: for the *old* (2024/2025) gaps, the M1 query's
+   `first_after` printed `2026-05-01T21:20:00+00:00` — a timestamp months
+   outside the requested historical window. `copy_rates_range` was not
+   staying inside the requested range the way round 5 assumed, and
+   round 5 had no check for that — meaning its `M1 = 0` for those gaps was
+   never actually trustworthy evidence.
+
+### The fix
+
+`scripts/audit_xauusd_m30_gaps.py` rewritten again (only this file plus
+its tests, per the brief — `validate_m30_candles.py`, `classify_gaps()`,
+the historical file, and training code remain untouched):
+
+* **`_validate_range()`** checks every M30, M1, and tick response against
+  the requested `[window_start, window_end)` before anything downstream
+  sees it. A returned timestamp outside that range flags
+  `QUERY_RANGE_VIOLATION` and is excluded from every count — the exact
+  fix for the 2026-05-01 bug: that bar is now caught and thrown out rather
+  than silently trusted.
+* **`M1_HISTORY_UNAVAILABLE`** is now reported explicitly whenever the M1
+  query either violates its range or returns nothing valid anywhere in
+  the *whole* 48h window — distinct from a genuine, corroborated `M1 = 0`
+  inside just the gap. `CALENDAR_RULE_MISMATCH` now structurally requires
+  `M1_HISTORY_UNAVAILABLE` to be false (validated M1 coverage must exist
+  somewhere nearby) before it can be reached at all.
+* **Full tick forensics**: first/last tick timestamp inside the gap,
+  count, ticks/hour, offset from gap start and end, and a 3-tick sample
+  from each end — printed for every gap, not just a bare count.
+* **`TICK_ACTIVITY_WITHOUT_M30`** is now a distinct, explicit evidence
+  flag (ticks present inside the gap, M30 absent) — printed on its own,
+  and structurally incapable of resolving to `BROKER_SESSION_GAP` or
+  `FETCH_PIPELINE_FAILURE` by itself. Per the brief, the conclusion stays
+  `UNKNOWN` (MEDIUM confidence — the evidence is real and rich, just not
+  sufficient to pick a specific cause) unless session evidence says
+  otherwise. This is exactly what fires for the three gaps with real tick
+  activity in the round-6 run.
+* **`SYNTHETIC_FROM_TICKS`** — an optional, in-memory-only aggregation of
+  in-gap ticks into 1-minute OHLC, purely to show whether real price
+  movement happened. Explicitly labelled on every bar it returns, never
+  written to disk, never compared into the historical file, never fed to
+  classification — it exists only to answer "was there price activity,"
+  not to stand in for missing M30 data.
+* **Exact timestamp lists** (not just counts) for `mt5_only` /
+  `historical_only`, over both the full window and the gap itself.
+* `terminal_info().maxbars` and per-query `mt5.last_error()` are now
+  surfaced in every report for diagnostic context.
+
+### Tests
+
+`tests/test_audit_xauusd_m30_gaps.py` rewritten again: **38 tests** (up
+from 22), all mocked. Covers, per the brief's explicit list: an M1
+timestamp outside the requested range (the literal 2026-05-01 bug,
+reproduced and proven caught), the same for M30 and for ticks, a
+completely-empty M1 response correctly reported `M1_HISTORY_UNAVAILABLE`
+(and that this blocks `CALENDAR_RULE_MISMATCH`), ticks present with no M30
+(including the exact real-world scale: 1,073 / 6,565 / 86,205 ticks — all
+three verified to land as `UNKNOWN`, none silently resolved), exact
+timestamp-set comparison, session metadata unavailable never alone
+producing `CALENDAR_RULE_MISMATCH`, and the synthetic-from-ticks
+aggregation being correctly labelled, empty-safe, and never touching disk.
+
+### Test results, round 6
+
+`pytest -q`: **993 passed**, 1 pre-existing unrelated failure (unchanged).
+
+### What this round found — and did not find
+
+The M1 range-violation bug is fixed and proven caught. Three of five gaps
+now have rich, validated tick evidence contradicting a simple "market was
+closed" story — but per the brief's explicit instruction, that evidence
+alone does **not** resolve to a conclusion; all three remain `UNKNOWN`
+(MEDIUM confidence) pending session evidence this MT5 package cannot
+provide. The other two gaps (`M30=0`, `M1=0`, `ticks=0`) remain `UNKNOWN`
+at LOW confidence — no corroborating evidence either way.
+
+**No calendar rule has been changed.** The evidence collected so far does
+not conclusively prove a specific broker/session closure for any of the
+five gaps, which is exactly the bar the brief set for touching
+`classify_gaps()`.
+
+### Files changed, round 6
+
+* `scripts/audit_xauusd_m30_gaps.py` — rewritten per above.
+* `tests/test_audit_xauusd_m30_gaps.py` — rewritten, 38 tests.
+* This report.
+
+Not touched: `scripts/validate_m30_candles.py`, `classify_gaps()` or any
+other part of `analysis/features/timeframe_alignment.py`,
+`data/historical/XAUUSD_M30.json`, `fetch_training_candles.py`, any model,
+training, or feature-spec code.
+
+### Next step
+
+Run the corrected script again on the Windows machine:
+
+```bash
+git pull
+python scripts/audit_xauusd_m30_gaps.py --symbol XAUUSD
+```
+
+Check specifically whether any `QUERY_RANGE_VIOLATION` still appears
+(would mean a third query-boundary issue exists), whether `M1_HISTORY_UNAVAILABLE`
+now correctly explains the old M1 gaps instead of a bogus 2026 timestamp,
+and read the full tick diagnostics for the three active gaps. Share the
+output back — five `UNKNOWN` results, honestly reported with rich evidence
+attached, is a legitimate outcome, not a failure of the investigation.
