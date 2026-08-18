@@ -33,6 +33,16 @@ audit = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(audit)
 
 
+# The one gap every FakeMT5 test fixture targets, as fixed constants rather
+# than back-computed from whatever margin a given caller happens to use
+# (M30/M1 use audit.MARGIN=24h, ticks and the multi-timeframe probe use
+# audit.PROBE_MARGIN=2h) — anchoring FakeMT5's synthetic bars/ticks to the
+# real gap boundaries directly means it is correct for every caller's
+# window without needing to know which margin that caller chose.
+_GAP_START = datetime(2025, 7, 3, 3, 30, tzinfo=timezone.utc)
+_GAP_END = datetime(2025, 7, 3, 12, 0, tzinfo=timezone.utc)
+
+
 class _TerminalInfo:
     def __init__(self, connected=True, company="MetaQuotes Ltd.",
                  path=r"C:\Program Files\MetaTrader 5", maxbars=100000):
@@ -59,8 +69,12 @@ class FakeMT5:
 
     TIMEFRAME_M30 = "M30"
     TIMEFRAME_M1 = "M1"
+    TIMEFRAME_M5 = "M5"
+    TIMEFRAME_M15 = "M15"
+    TIMEFRAME_H1 = "H1"
     COPY_TICKS_ALL = -1
     __version__ = "5.0.5735"
+    _SPAN_MINUTES = {"M1": 1, "M5": 5, "M15": 15, "M30": 30, "H1": 60}
 
     def __init__(self, *, initialize_ok=True, symbol_known=True, symbol_selectable=True,
                  m30_bars_in_gap=0, m1_bars_in_gap=0, tick_status="OK",
@@ -104,12 +118,21 @@ class FakeMT5:
         return (1, "no error")
 
     def copy_rates_range(self, symbol, timeframe, start, end):
+        """`start`/`end` are whatever window the caller requested — 24h
+        margin for M30/M1, 2h for the multi-timeframe probe. Bars are
+        placed relative to the fixed real gap constants (`_GAP_START`/
+        `_GAP_END`), not derived from `start`/`end`, so this is correct
+        regardless of which margin the caller used."""
         if timeframe == self.TIMEFRAME_M1 and self.m1_totally_empty:
             return []
-        span = timedelta(minutes=30) if timeframe == self.TIMEFRAME_M30 else timedelta(minutes=1)
-        gap_start = start + audit.MARGIN
-        gap_end = end - audit.MARGIN
-        n_in_gap = self.m30_bars_in_gap if timeframe == self.TIMEFRAME_M30 else self.m1_bars_in_gap
+        span = timedelta(minutes=self._SPAN_MINUTES.get(timeframe, 30))
+        gap_start, gap_end = _GAP_START, _GAP_END
+        if timeframe == self.TIMEFRAME_M30:
+            n_in_gap = self.m30_bars_in_gap
+        elif timeframe == self.TIMEFRAME_M1:
+            n_in_gap = self.m1_bars_in_gap
+        else:
+            n_in_gap = 0
         bars = [{"time": (gap_start + i * span).replace(tzinfo=timezone.utc).timestamp(),
                  "open": 2000.0, "high": 2001.0, "low": 1999.0, "close": 2000.5}
                 for i in range(n_in_gap)]
@@ -127,12 +150,15 @@ class FakeMT5:
         return bars
 
     def copy_ticks_range(self, symbol, start, end, flags):
+        """`start`/`end` here are whatever window the caller requested
+        (2h margin for the production tick query); ticks are placed
+        relative to the fixed real gap constants, same reasoning as
+        `copy_rates_range`."""
         if self.tick_status == "ERROR":
             return None
         if self.tick_status == "RAISE":
             raise RuntimeError("simulated tick-query crash")
-        gap_start = start + audit.MARGIN
-        gap_end = end - audit.MARGIN
+        gap_start, gap_end = _GAP_START, _GAP_END
         ticks = []
         for i in range(self.ticks_before):
             ticks.append({"time": (start + timedelta(minutes=i)).replace(tzinfo=timezone.utc).timestamp()})
@@ -158,8 +184,7 @@ class FakeMT5WithSession(FakeMT5):
 
 
 def gap():
-    return (datetime(2025, 7, 3, 3, 30, tzinfo=timezone.utc),
-            datetime(2025, 7, 3, 12, 0, tzinfo=timezone.utc))
+    return (_GAP_START, _GAP_END)
 
 
 # ---------------------------------------------------------------------------
@@ -479,3 +504,208 @@ class TestHelpers:
     def test_tick_epoch_prefers_time_msc(self):
         assert audit.tick_epoch({"time": 100, "time_msc": 100500}) == pytest.approx(100.5)
         assert audit.tick_epoch({"time": 100}) == 100.0
+
+
+# ---------------------------------------------------------------------------
+# None vs empty-array — the API can fail two different ways, and this
+# script must never fold them into the same "0 bars" bucket.
+# ---------------------------------------------------------------------------
+
+class FakeMT5NoneResponse(FakeMT5):
+    """copy_rates_range/copy_ticks_range return None outright — a query
+    failure, distinct from a successful query that found nothing."""
+
+    def copy_rates_range(self, symbol, timeframe, start, end):
+        return None
+
+    def copy_ticks_range(self, symbol, start, end, flags):
+        return None
+
+
+class TestNoneVsEmptyResponse:
+    def test_m30_none_response_is_distinguished_from_empty(self):
+        start, end = gap()
+        mt5 = FakeMT5NoneResponse()
+        result = audit.audit_one_gap(mt5, "XAUUSD", start, end, historical=[])
+        assert result["m30_query"]["raw_kind"] == "none"
+
+    def test_m30_empty_response_is_distinguished_from_none(self):
+        start, end = gap()
+        mt5 = FakeMT5(m30_bars_in_gap=0)  # generates only the two boundary bars, not empty —
+        # use a dedicated all-empty fake for the true empty-array case
+        result = audit.audit_one_gap(mt5, "XAUUSD", start, end, historical=[])
+        assert result["m30_query"]["raw_kind"] == "data"  # boundary bars are real data
+
+    def test_m1_totally_empty_is_reported_as_empty_not_none(self):
+        start, end = gap()
+        mt5 = FakeMT5(m1_totally_empty=True)
+        result = audit.audit_one_gap(mt5, "XAUUSD", start, end, historical=[])
+        assert result["m1_query"]["raw_kind"] == "empty"
+
+    def test_tick_none_response_is_reported_as_none_not_zero_ticks(self):
+        start, end = gap()
+        mt5 = FakeMT5NoneResponse()
+        result = audit.audit_one_gap(mt5, "XAUUSD", start, end, historical=[])
+        assert result["tick_query"]["raw_kind"] == "none"
+        assert result["tick_status"] == "ERROR"
+
+
+# ---------------------------------------------------------------------------
+# Multi-timeframe probe and the TICKS_PRESENT_BARS_ABSENT evidence category
+# ---------------------------------------------------------------------------
+
+class TestMultiTimeframeProbe:
+    def test_probe_covers_all_five_timeframes(self):
+        start, end = gap()
+        mt5 = FakeMT5()
+        probe = audit.probe_all_timeframes(mt5, "XAUUSD", start, end)
+        assert set(probe) == set(audit.PROBE_TIMEFRAMES)
+
+    def test_an_unsupported_timeframe_is_reported_not_crashed_on(self):
+        class _NoM5Wrapper:
+            """Delegates to a real FakeMT5 for everything except
+            TIMEFRAME_M5, simulating a package that lacks that constant —
+            getattr(mt5, "TIMEFRAME_M5", None) must return None, not raise."""
+
+            def __init__(self, inner):
+                self._inner = inner
+
+            def __getattr__(self, name):
+                if name == "TIMEFRAME_M5":
+                    raise AttributeError(name)
+                return getattr(self._inner, name)
+
+        mt5 = _NoM5Wrapper(FakeMT5())
+        start, end = gap()
+        p = audit.probe_timeframe(mt5, "XAUUSD", "M5", start, end)
+        assert p["supported"] is False
+
+    def test_ticks_present_bars_absent_when_every_timeframe_is_empty(self):
+        start, end = gap()
+        mt5 = FakeMT5(m30_bars_in_gap=0, m1_bars_in_gap=0, ticks_in_gap=500)
+        result = audit.audit_one_gap(mt5, "XAUUSD", start, end, historical=[])
+        assert result["evidence_state"] == "TICKS_PRESENT_BARS_ABSENT"
+
+    def test_no_activity_when_ticks_and_all_bars_are_empty(self):
+        start, end = gap()
+        mt5 = FakeMT5(m30_bars_in_gap=0, m1_bars_in_gap=0, ticks_in_gap=0,
+                       ticks_before=0, ticks_after=0)
+        result = audit.audit_one_gap(mt5, "XAUUSD", start, end, historical=[])
+        assert result["evidence_state"] == "NO_ACTIVITY"
+
+    def test_bars_present_some_timeframe_when_m1_has_bars(self):
+        start, end = gap()
+        mt5 = FakeMT5(m30_bars_in_gap=0, m1_bars_in_gap=4)
+        result = audit.audit_one_gap(mt5, "XAUUSD", start, end, historical=[])
+        assert result["evidence_state"] == "BARS_PRESENT_SOME_TIMEFRAME"
+
+    def test_classify_evidence_state_is_a_pure_function_of_its_inputs(self):
+        probe_all_empty = {tf: {"supported": True, "bars_in_gap": 0}
+                            for tf in audit.PROBE_TIMEFRAMES}
+        assert audit.classify_evidence_state(0, probe_all_empty) == "NO_ACTIVITY"
+        assert audit.classify_evidence_state(10, probe_all_empty) == "TICKS_PRESENT_BARS_ABSENT"
+        probe_one_has_bars = dict(probe_all_empty)
+        probe_one_has_bars["H1"] = {"supported": True, "bars_in_gap": 1}
+        assert audit.classify_evidence_state(0, probe_one_has_bars) == "BARS_PRESENT_SOME_TIMEFRAME"
+
+
+# ---------------------------------------------------------------------------
+# Tick continuity analysis
+# ---------------------------------------------------------------------------
+
+class TestTickContinuity:
+    def test_no_ticks_reports_pattern_none(self):
+        start, end = gap()
+        result = audit.analyze_tick_continuity([], start, end)
+        assert result["pattern"] == "NONE"
+
+    def test_too_few_ticks_to_assess(self):
+        start, end = gap()
+        ticks = [{"time": start.timestamp() + 60}]
+        result = audit.analyze_tick_continuity(ticks, start, end)
+        assert result["pattern"] == "TOO_FEW_TO_ASSESS"
+
+    def test_ticks_spread_through_the_gap_are_distributed(self):
+        start, end = gap()
+        span = (end - start).total_seconds()
+        ticks = [{"time": start.timestamp() + span * frac} for frac in
+                 (0.05, 0.2, 0.4, 0.5, 0.6, 0.8, 0.95)]
+        result = audit.analyze_tick_continuity(ticks, start, end)
+        assert result["pattern"] == "DISTRIBUTED_THROUGH_GAP"
+
+    def test_ticks_only_at_the_edges_are_concentrated_at_boundary(self):
+        start, end = gap()
+        span = (end - start).total_seconds()
+        ticks = [{"time": start.timestamp() + span * frac} for frac in
+                 (0.001, 0.01, 0.02, 0.03, 0.99, 0.98)]
+        result = audit.analyze_tick_continuity(ticks, start, end)
+        assert result["pattern"] == "CONCENTRATED_AT_BOUNDARY"
+
+    def test_bid_ask_presence_is_detected(self):
+        start, end = gap()
+        ticks = [{"time": start.timestamp() + 60 * i, "bid": 2000.0 + i, "ask": 2000.5 + i}
+                 for i in range(6)]
+        result = audit.analyze_tick_continuity(ticks, start, end)
+        assert result["has_bid"] is True
+        assert result["has_ask"] is True
+
+    def test_duplicate_timestamps_are_counted(self):
+        start, end = gap()
+        t = start.timestamp() + 100
+        ticks = [{"time": t} for _ in range(6)]
+        result = audit.analyze_tick_continuity(ticks, start, end)
+        assert result["unique_timestamps"] == 1
+        assert result["duplicate_timestamps"] == 5
+
+
+# ---------------------------------------------------------------------------
+# assert_in_window — structural guarantee that a displayed record cannot
+# belong to the wrong window
+# ---------------------------------------------------------------------------
+
+class TestAssertInWindow:
+    def test_a_timestamp_inside_the_window_does_not_raise(self):
+        window_start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        window_end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+        audit.assert_in_window(window_start.timestamp() + 3600, window_start, window_end, "test")
+
+    def test_a_timestamp_outside_the_window_raises(self):
+        window_start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+        window_end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+        far_future = datetime(2026, 5, 1, tzinfo=timezone.utc).timestamp()
+        with pytest.raises(AssertionError, match="outside the requested window"):
+            audit.assert_in_window(far_future, window_start, window_end, "test")
+
+    def test_print_report_never_raises_for_a_well_behaved_gap(self):
+        """End-to-end: every before/after record print_report displays for
+        a normal gap must pass its own window assertions without raising."""
+        start, end = gap()
+        mt5 = FakeMT5()
+        connection = audit.connect_mt5(mt5, "XAUUSD")
+        result = audit.audit_one_gap(mt5, "XAUUSD", start, end, historical=[])
+        audit.print_report(1, result, connection)  # must not raise
+
+
+# ---------------------------------------------------------------------------
+# --gap-index CLI argument
+# ---------------------------------------------------------------------------
+
+class TestGapIndexCLI:
+    def test_gap_index_and_start_are_mutually_exclusive(self, monkeypatch, capsys):
+        monkeypatch.setattr(sys, "argv", [
+            "audit_xauusd_m30_gaps.py", "--gap-index", "2",
+            "--start", "2025-01-01T00:00:00+00:00", "--end", "2025-01-01T01:00:00+00:00",
+        ])
+        exit_code = audit.main()
+        assert exit_code == 1
+        assert "mutually exclusive" in capsys.readouterr().out
+
+    def test_gap_index_out_of_range_is_rejected_by_argparse(self, monkeypatch):
+        monkeypatch.setattr(sys, "argv", ["audit_xauusd_m30_gaps.py", "--gap-index", "99"])
+        with pytest.raises(SystemExit):
+            audit.main()
+
+    def test_gap_index_selects_the_right_reported_gap(self):
+        assert audit.REPORTED_GAPS[2] == (
+            datetime(2025, 7, 3, 3, 30, tzinfo=timezone.utc),
+            datetime(2025, 7, 3, 12, 0, tzinfo=timezone.utc))
