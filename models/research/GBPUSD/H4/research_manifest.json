@@ -1,0 +1,242 @@
+{
+  "generated_at_utc": "2026-08-26T21:53:49.352065+00:00",
+  "environment": {
+    "python": "3.11.15",
+    "platform": "Linux-6.18.44-fc-v21-x86_64-with-glibc2.39",
+    "numpy": "2.4.6",
+    "pandas": "2.3.3",
+    "sklearn": "1.9.0",
+    "xgboost": "3.2.0",
+    "seed": 42,
+    "git_commit": "6d6e0ba127786764411eb204c7911877b4d7a57c",
+    "provenance_hashes": {
+      "config_features_yaml": "5ca9173775f5384a731a048ad7930969e4d4b527f427f0a7d676c2c5ca8765b9",
+      "config_target_yaml": "f888c7d8ed17308524b18ce3e4cc6a58fb5364d41f22cc73d0cf15e3285b3980",
+      "config_training_yaml": "2821f6bd9c19e36f3c10e18b1a82845ea7b76c9e1c441fca3874253e633707ef",
+      "config_timeframes_yaml": "3edac0d1b62b3fb4006a693677a2cff4e9b018b46c67129faa219efe41f18a56",
+      "config_symbols_yaml": "b1fb52882e17225f0029ca799ca975f5054ff0b37302d0f13afa8758219945a8",
+      "phase3_feature_manifest": "949efce17e422632c6564273eef3bc34367c2522fc1aec49d2e1cf37315af679",
+      "phase4_target_spec": "5499d10a78bf699f50a00d70526e45f943b42dae7c7ad93b1019c4bb9240d54c",
+      "src_research_tree": "b0add5db0e6f6a46297317c5bd8814226aac67ae1faf9c7036da8437d1381ab9"
+    }
+  },
+  "symbol": "GBPUSD",
+  "entry_timeframe": "H4",
+  "selection": {
+    "feature_set": "scale_free_dedup_nodir",
+    "model": "logit_l2",
+    "weighting": "none",
+    "n_features": 40,
+    "dev_auc_mean": 0.5043335586983126,
+    "dev_auc_std": 0.01969705889444413,
+    "dev_train_val_gap": 0.04414286578089468,
+    "selection_score": 0.4834493128058669,
+    "runners_up": [
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_en",
+        "weighting": "none",
+        "score": 0.48318263787937277
+      },
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_en",
+        "weighting": "uniqueness",
+        "score": 0.4773872981685247
+      },
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_l2",
+        "weighting": "uniqueness",
+        "score": 0.4760948241994989
+      }
+    ]
+  },
+  "feature_set": "scale_free_dedup_nodir",
+  "features": [
+    "rsi",
+    "trend_strength",
+    "trend_score",
+    "momentum_score",
+    "volatility_score",
+    "market_regime",
+    "session_asian",
+    "session_london",
+    "session_newyork",
+    "direction",
+    "return_1",
+    "return_3",
+    "return_5",
+    "distance_from_recent_high",
+    "distance_from_recent_low",
+    "rolling_volatility",
+    "adx",
+    "plus_di",
+    "minus_di",
+    "bb_width",
+    "bb_percent_b",
+    "stochastic_k",
+    "stochastic_d",
+    "cci_20",
+    "range_atr",
+    "body_atr",
+    "upper_wick_atr",
+    "lower_wick_atr",
+    "distance_close_ema50_atr",
+    "distance_from_day_high",
+    "distance_from_day_low",
+    "day_range_atr",
+    "position_in_day_range",
+    "return_acceleration_1_3",
+    "return_acceleration_3_5",
+    "close_to_sma20_atr",
+    "atr_pct",
+    "hour_of_day",
+    "day_of_week",
+    "spread_relative"
+  ],
+  "calibration": {
+    "method": "isotonic",
+    "candidates": {
+      "sigmoid": {
+        "brier": 0.23196887103074473,
+        "ece": 5.0021696514357394e-06
+      },
+      "isotonic": {
+        "brier": 0.23106576820217398,
+        "ece": 5.445280778722263e-17
+      }
+    },
+    "fitted_on": "development out-of-fold predictions"
+  },
+  "threshold": {
+    "selected_on": "development out-of-fold only",
+    "threshold": 0.38775510204081637,
+    "oof_precision": 0.398989898989899,
+    "oof_selected_share": 0.07401869158878505
+  },
+  "development": {
+    "dev_auc_mean": 0.5043335586983126,
+    "dev_auc_std": 0.01969705889444413,
+    "dev_train_val_gap": 0.04414286578089468,
+    "folds_above_half": 3,
+    "n_folds": 5,
+    "dev_ci_lo": 0.4877555081395021,
+    "dev_ci_hi": 0.5287058020764971,
+    "dev_pooled_auc": 0.5129179459394377
+  },
+  "validation": {
+    "accuracy": 0.5995145631067961,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "roc_auc": 0.5049932523616734,
+    "pr_auc": 0.4005787721454419,
+    "log_loss": 0.6752659466160026,
+    "brier": 0.2410594720330207,
+    "ece": 0.02530005453821407,
+    "n": 824,
+    "base_rate": 0.40048543689320387,
+    "prior_log_loss": 0.6732080038623753,
+    "prior_brier": 0.24009685172966358,
+    "beats_prior_log_loss": false,
+    "beats_prior_brier": false,
+    "train_roc_auc": 0.5425492530716691,
+    "train_val_gap": 0.03755600070999576,
+    "calibrated_brier": 0.24096572406884315,
+    "calibrated_ece": 0.027580285907666615,
+    "calibrated_log_loss": 0.675061071131452
+  },
+  "validation_ci": {
+    "auc": 0.5049932523616734,
+    "lo": 0.48298558951778536,
+    "hi": 0.5199895509522403,
+    "boot_mean": 0.5015802875729516,
+    "boot_std": 0.009952204871640313,
+    "n_boot": 300
+  },
+  "alternative_target": {
+    "label": "TP 2.5xATR before SL 1.5xATR within 15 bars (60.0h)",
+    "verdict": "NO_SIGNAL",
+    "verdict_reasons": [
+      "block-permutation null on the shortened label: observed 0.4831 vs null mean 0.5021, p=0.7363, q=0.7363 across 9 datasets -> NO_EVIDENCE"
+    ],
+    "horizon_bars": 15,
+    "frozen_horizon_bars": 60,
+    "n_train": 4024,
+    "n_val": 670,
+    "base_rate": 0.3412,
+    "effective_labels": 398.2,
+    "dev_auc_mean": 0.5010266819500914,
+    "dev_auc_std": 0.016639383501941586,
+    "folds_above_half": 3,
+    "n_folds": 5,
+    "dev_train_val_gap": 0.05522051465045569,
+    "validation": {
+      "accuracy": 0.6268656716417911,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "roc_auc": 0.5000285714285714,
+      "pr_auc": 0.37478454882434126,
+      "log_loss": 0.6623388503941166,
+      "brier": 0.2347074191214899,
+      "ece": 0.03357192844482261,
+      "n": 670,
+      "base_rate": 0.373134328358209,
+      "prior_log_loss": 0.6606027747699736,
+      "prior_brier": 0.23390510135887727,
+      "beats_prior_log_loss": false,
+      "train_roc_auc": 0.5478541126862487,
+      "train_val_gap": 0.04782554125767735
+    }
+  },
+  "verdict": "NO_SIGNAL",
+  "verdict_reasons": [
+    "block-permutation null: observed 0.5028 vs null mean 0.5044, p=0.5282 (47.3th percentile) -> NO_EVIDENCE",
+    "development ROC-AUC 0.5043 +/- 0.0197 over 5 purged windows, 3/5 above 0.5",
+    "block-bootstrap 95% CI on pooled out-of-fold AUC: [0.4878, 0.5287]",
+    "train/development AUC gap +0.044 (within the 0.10 bar)",
+    "39% of the calendar survives the eligibility mask",
+    "336 independent label episodes in TRAIN"
+  ],
+  "dataset_hashes": {
+    "train": {
+      "recorded": "042eeeeb6767abb6da2668957945795bb2a351930893f15e437da48adabd051c",
+      "actual": "042eeeeb6767abb6da2668957945795bb2a351930893f15e437da48adabd051c",
+      "match": true
+    },
+    "validation": {
+      "recorded": "19a439e5f341e5d020cae643b5f57ad04f0f00bb7bcf1020d908c606c72fb5ef",
+      "actual": "19a439e5f341e5d020cae643b5f57ad04f0f00bb7bcf1020d908c606c72fb5ef",
+      "match": true
+    },
+    "test": {
+      "recorded": "2180c1a89808c5230fed167c1a96713ef60c502c1cc55f6003cc2c6ee9d32112",
+      "actual": "2180c1a89808c5230fed167c1a96713ef60c502c1cc55f6003cc2c6ee9d32112",
+      "match": true
+    },
+    "build_mode": "REAL"
+  },
+  "source_dataset_manifest_schema_hash": "6e1ccc556af921e3293b00819ffa60643436e79e9438ec3115c15980739a6497",
+  "source_dataset_provenance": {
+    "phase3_feature_manifest_sha256": "50fbf12ac27a29e8c21199d437a6591de6e435a4f1377dec9bdd6e0b3fdcf656",
+    "phase4_target_spec_sha256": "8bb637ca2c92cce04bb5edf3b253738aa8866b6c2d56d4c37107a9473683b985",
+    "config/training.yaml": "22baa6ba67aa0ee37910dd06592bab4f6a4286eea52522d657b0e8b64c29826b",
+    "config/target.yaml": "78dfff34c787474942e2b44ea3540472098eb50be321ea0dca2c49fcf7835e41",
+    "raw_inventory_ref": "data/reports/feature_engineering/phase3_feature_manifest.json::raw_data_inventory_sha256"
+  },
+  "model_config": {
+    "penalty": "l2",
+    "C": 0.01,
+    "solver": "lbfgs"
+  },
+  "random_seed": 42,
+  "walk_forward": {
+    "n_folds": 5,
+    "embargo_bars": 100,
+    "purge_bars": 60,
+    "mode": "expanding"
+  },
+  "test_split": "LOCKED -- never read by src/research"
+}

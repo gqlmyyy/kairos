@@ -6,6 +6,13 @@ rebuild; all of it predates that work.
 
 Planned follow-up work lives in `ROADMAP.md`.
 
+The **research entry models** from the xgbooost project are integrated on a
+separate, contract-checked path — see `RESEARCH_MODEL_INTEGRATION.md`. That
+work does not fix item 0 below: it neither retrains nor replaces
+`models/entry/entry_model.json`, and every research model it imports was
+rejected by the research repository's own gates (8 `NO_SIGNAL`, 1 `DROP`).
+It is offline validation only; nothing is wired to live trading.
+
 ---
 
 ## 0. THE ENTRY MODEL STILL GATES SHUT — the bot cannot open a trade

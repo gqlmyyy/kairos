@@ -1,0 +1,125 @@
+{
+  "files": {
+    "EURUSD_H1": {
+      "bars": 700,
+      "first": "2026-07-06 19:00:00+00:00",
+      "last": "2026-08-14 22:00:00+00:00",
+      "ohlc_provenance": "REAL, tail(700) of data/historical/EURUSD_H1.json",
+      "path": "tests/fixtures/research/candles/EURUSD_H1.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "EURUSD_H4": {
+      "bars": 340,
+      "first": "2026-05-28 04:00:00+00:00",
+      "last": "2026-08-14 16:00:00+00:00",
+      "ohlc_provenance": "REAL, tail(340) of data/historical/EURUSD_H4.json",
+      "path": "tests/fixtures/research/candles/EURUSD_H4.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "GBPUSD_H1": {
+      "bars": 700,
+      "first": "2026-07-06 19:00:00+00:00",
+      "last": "2026-08-14 22:00:00+00:00",
+      "ohlc_provenance": "REAL, tail(700) of data/historical/GBPUSD_H1.json",
+      "path": "tests/fixtures/research/candles/GBPUSD_H1.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "GBPUSD_H4": {
+      "bars": 340,
+      "first": "2026-05-28 04:00:00+00:00",
+      "last": "2026-08-14 16:00:00+00:00",
+      "ohlc_provenance": "REAL, tail(340) of data/historical/GBPUSD_H4.json",
+      "path": "tests/fixtures/research/candles/GBPUSD_H4.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_EURUSD_H1": {
+      "bars": 700,
+      "first": "2025-12-02 21:00:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_EURUSD_H1.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_EURUSD_H4": {
+      "bars": 340,
+      "first": "2025-11-05 12:00:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_EURUSD_H4.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_EURUSD_M15": {
+      "bars": 1400,
+      "first": "2025-12-17 10:15:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_EURUSD_M15.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_GBPUSD_H1": {
+      "bars": 700,
+      "first": "2025-12-02 21:00:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_GBPUSD_H1.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_GBPUSD_H4": {
+      "bars": 340,
+      "first": "2025-11-05 12:00:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_GBPUSD_H4.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_GBPUSD_M15": {
+      "bars": 1400,
+      "first": "2025-12-17 10:15:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_GBPUSD_M15.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_XAUUSD_H1": {
+      "bars": 700,
+      "first": "2025-12-02 21:00:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_XAUUSD_H1.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_XAUUSD_H4": {
+      "bars": 340,
+      "first": "2025-11-05 12:00:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_XAUUSD_H4.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "SYNTH_XAUUSD_M15": {
+      "bars": 1400,
+      "first": "2025-12-17 10:15:00+00:00",
+      "last": "2026-01-01 00:00:00+00:00",
+      "ohlc_provenance": "SYNTHETIC deterministic random walk (KAIROS stores no M15 candles)",
+      "path": "tests/fixtures/research/candles/SYNTH_XAUUSD_M15.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "XAUUSD_H1": {
+      "bars": 700,
+      "first": "2026-07-02 02:00:00+00:00",
+      "last": "2026-08-14 21:00:00+00:00",
+      "ohlc_provenance": "REAL, tail(700) of data/historical/XAUUSD_H1.json",
+      "path": "tests/fixtures/research/candles/XAUUSD_H1.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    },
+    "XAUUSD_H4": {
+      "bars": 340,
+      "first": "2026-05-28 04:00:00+00:00",
+      "last": "2026-08-14 16:00:00+00:00",
+      "ohlc_provenance": "REAL, tail(340) of data/historical/XAUUSD_H4.json",
+      "path": "tests/fixtures/research/candles/XAUUSD_H4.json",
+      "spread_source": "SYNTHETIC_FIXTURE_ONLY"
+    }
+  },
+  "note": "Fixtures for research golden-parity tests. The `spread` column is SYNTHETIC in every file (see scripts/build_research_fixtures.py). H1/H4 OHLC is real; the M15 stack is entirely synthetic because KAIROS stores no M15 candles."
+}

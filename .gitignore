@@ -28,7 +28,14 @@ models_backup/
 models/tmp_*.json
 models/test_*.json
 models/entry/research/
-research/
+# Scratch research output only. This was once a bare `research/`, which matches
+# every directory of that name at any depth — it silently excluded the research
+# model integration's source (analysis/research/), its artifacts
+# (models/research/) and its test fixtures. Scoped to the paths that actually
+# hold generated output.
+models/*/research/
+data/research/
+reports/research/
 
 # Reports & scratch output
 reports/output/

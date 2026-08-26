@@ -1,0 +1,245 @@
+{
+  "generated_at_utc": "2026-08-26T21:54:20.411113+00:00",
+  "environment": {
+    "python": "3.11.15",
+    "platform": "Linux-6.18.44-fc-v21-x86_64-with-glibc2.39",
+    "numpy": "2.4.6",
+    "pandas": "2.3.3",
+    "sklearn": "1.9.0",
+    "xgboost": "3.2.0",
+    "seed": 42,
+    "git_commit": "6d6e0ba127786764411eb204c7911877b4d7a57c",
+    "provenance_hashes": {
+      "config_features_yaml": "5ca9173775f5384a731a048ad7930969e4d4b527f427f0a7d676c2c5ca8765b9",
+      "config_target_yaml": "f888c7d8ed17308524b18ce3e4cc6a58fb5364d41f22cc73d0cf15e3285b3980",
+      "config_training_yaml": "2821f6bd9c19e36f3c10e18b1a82845ea7b76c9e1c441fca3874253e633707ef",
+      "config_timeframes_yaml": "3edac0d1b62b3fb4006a693677a2cff4e9b018b46c67129faa219efe41f18a56",
+      "config_symbols_yaml": "b1fb52882e17225f0029ca799ca975f5054ff0b37302d0f13afa8758219945a8",
+      "phase3_feature_manifest": "949efce17e422632c6564273eef3bc34367c2522fc1aec49d2e1cf37315af679",
+      "phase4_target_spec": "5499d10a78bf699f50a00d70526e45f943b42dae7c7ad93b1019c4bb9240d54c",
+      "src_research_tree": "b0add5db0e6f6a46297317c5bd8814226aac67ae1faf9c7036da8437d1381ab9"
+    }
+  },
+  "symbol": "EURUSD",
+  "entry_timeframe": "H4",
+  "selection": {
+    "feature_set": "scale_free_dedup_nodir",
+    "model": "logit_en",
+    "weighting": "none",
+    "n_features": 40,
+    "dev_auc_mean": 0.4895539759540217,
+    "dev_auc_std": 0.04896044560959611,
+    "dev_train_val_gap": 0.060085725408090596,
+    "selection_score": 0.450052321797201,
+    "runners_up": [
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_en",
+        "weighting": "uniqueness",
+        "score": 0.44649420561932607
+      },
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_l2",
+        "weighting": "none",
+        "score": 0.44184277108316933
+      },
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_l2",
+        "weighting": "uniqueness",
+        "score": 0.4388083290817384
+      }
+    ]
+  },
+  "feature_set": "scale_free_dedup_nodir",
+  "features": [
+    "rsi",
+    "trend_strength",
+    "trend_score",
+    "momentum_score",
+    "volatility_score",
+    "market_regime",
+    "session_asian",
+    "session_london",
+    "session_newyork",
+    "direction",
+    "return_1",
+    "return_3",
+    "return_5",
+    "distance_from_recent_high",
+    "distance_from_recent_low",
+    "rolling_volatility",
+    "adx",
+    "plus_di",
+    "minus_di",
+    "bb_width",
+    "bb_percent_b",
+    "stochastic_k",
+    "stochastic_d",
+    "range_atr",
+    "body_atr",
+    "upper_wick_atr",
+    "lower_wick_atr",
+    "distance_close_ema50_atr",
+    "ema20_ema50_distance_atr",
+    "distance_from_day_high",
+    "distance_from_day_low",
+    "day_range_atr",
+    "position_in_day_range",
+    "return_acceleration_1_3",
+    "return_acceleration_3_5",
+    "close_to_sma20_atr",
+    "atr_pct",
+    "hour_of_day",
+    "day_of_week",
+    "spread_relative"
+  ],
+  "calibration": {
+    "method": "isotonic",
+    "candidates": {
+      "sigmoid": {
+        "brier": 0.2296416077017371,
+        "ece": 1.838550401367378e-07
+      },
+      "isotonic": {
+        "brier": 0.22960904738170126,
+        "ece": 1.0977369175065981e-16
+      }
+    },
+    "fitted_on": "development out-of-fold predictions"
+  },
+  "threshold": {
+    "selected_on": "development out-of-fold only",
+    "threshold": 0.35833333333333334,
+    "oof_precision": 0.36507936507936506,
+    "oof_selected_share": 0.23617619493908154
+  },
+  "development": {
+    "dev_auc_mean": 0.4895539759540217,
+    "dev_auc_std": 0.04896044560959611,
+    "dev_train_val_gap": 0.060085725408090596,
+    "folds_above_half": 1,
+    "n_folds": 4,
+    "dev_ci_lo": 0.44674810632855755,
+    "dev_ci_hi": 0.5110016030744942,
+    "dev_pooled_auc": 0.47766270493369506
+  },
+  "validation": {
+    "accuracy": 0.626984126984127,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "roc_auc": 0.4915162941018044,
+    "pr_auc": 0.3529193545260821,
+    "log_loss": 0.6618670545725441,
+    "brier": 0.23449940737008487,
+    "ece": 0.009062328609601766,
+    "n": 252,
+    "base_rate": 0.373015873015873,
+    "prior_log_loss": 0.6605412908779269,
+    "prior_brier": 0.23387503149407912,
+    "beats_prior_log_loss": false,
+    "beats_prior_brier": false,
+    "train_roc_auc": 0.5415662833704471,
+    "train_val_gap": 0.05004998926864268,
+    "calibrated_brier": 0.23416614223813376,
+    "calibrated_ece": 0.01706196776619301,
+    "calibrated_log_loss": 0.6611718499877864
+  },
+  "validation_ci": {
+    "auc": 0.4915162941018044,
+    "lo": 0.45445489762036523,
+    "hi": 0.5226202920271614,
+    "boot_mean": 0.4916868331386839,
+    "boot_std": 0.018204392807900573,
+    "n_boot": 300
+  },
+  "alternative_target": {
+    "label": "TP 2.5xATR before SL 1.5xATR within 15 bars (60.0h)",
+    "verdict": "NO_SIGNAL",
+    "verdict_reasons": [
+      "block-permutation null on the shortened label: observed 0.5446 vs null mean 0.5059, p=0.2637, q=0.3955 across 9 datasets -> NO_EVIDENCE"
+    ],
+    "horizon_bars": 15,
+    "frozen_horizon_bars": 60,
+    "n_train": 1849,
+    "n_val": 198,
+    "base_rate": 0.3429,
+    "effective_labels": 181.7,
+    "dev_auc_mean": 0.5229153010045098,
+    "dev_auc_std": 0.02502936679471974,
+    "folds_above_half": 3,
+    "n_folds": 4,
+    "dev_train_val_gap": 0.05159833931190616,
+    "validation": {
+      "accuracy": 0.6464646464646465,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "roc_auc": 0.5391741071428572,
+      "pr_auc": 0.3792864774129733,
+      "log_loss": 0.6496808794880138,
+      "brier": 0.22854931722890326,
+      "ece": 0.014969487090110091,
+      "n": 198,
+      "base_rate": 0.35353535353535354,
+      "prior_log_loss": 0.649607734102787,
+      "prior_brier": 0.22854810733598616,
+      "beats_prior_log_loss": false,
+      "train_roc_auc": 0.5601984915164024,
+      "train_val_gap": 0.021024384373545257
+    }
+  },
+  "verdict": "DROP",
+  "verdict_reasons": [
+    "block-permutation null: observed 0.5547 vs null mean 0.5154, p=0.2126 (79.0th percentile) -> NO_EVIDENCE",
+    "development ROC-AUC 0.4896 +/- 0.0490 over 4 purged windows, 1/4 above 0.5",
+    "block-bootstrap 95% CI on pooled out-of-fold AUC: [0.4467, 0.5110]",
+    "train/development AUC gap +0.060 (within the 0.10 bar)",
+    "17% of the calendar survives the eligibility mask",
+    "152 independent label episodes in TRAIN",
+    "too few independent labels AND too little calendar to support a conclusion either way -- rebuild before re-asking"
+  ],
+  "dataset_hashes": {
+    "train": {
+      "recorded": "086642ed9882ac58b0032a81c74d4803b896a20603cd64ff656714744880121e",
+      "actual": "086642ed9882ac58b0032a81c74d4803b896a20603cd64ff656714744880121e",
+      "match": true
+    },
+    "validation": {
+      "recorded": "0a4b8fc630f61df50acfd1fb39a584bc1edbfa77307ba86305079b57e4ccfdea",
+      "actual": "0a4b8fc630f61df50acfd1fb39a584bc1edbfa77307ba86305079b57e4ccfdea",
+      "match": true
+    },
+    "test": {
+      "recorded": "0d2c91be5b4945e859268c95ae4f6e53eab8a3751613c7bdecfb4346383949a3",
+      "actual": "0d2c91be5b4945e859268c95ae4f6e53eab8a3751613c7bdecfb4346383949a3",
+      "match": true
+    },
+    "build_mode": "REAL"
+  },
+  "source_dataset_manifest_schema_hash": "6e1ccc556af921e3293b00819ffa60643436e79e9438ec3115c15980739a6497",
+  "source_dataset_provenance": {
+    "phase3_feature_manifest_sha256": "50fbf12ac27a29e8c21199d437a6591de6e435a4f1377dec9bdd6e0b3fdcf656",
+    "phase4_target_spec_sha256": "8bb637ca2c92cce04bb5edf3b253738aa8866b6c2d56d4c37107a9473683b985",
+    "config/training.yaml": "22baa6ba67aa0ee37910dd06592bab4f6a4286eea52522d657b0e8b64c29826b",
+    "config/target.yaml": "78dfff34c787474942e2b44ea3540472098eb50be321ea0dca2c49fcf7835e41",
+    "raw_inventory_ref": "data/reports/feature_engineering/phase3_feature_manifest.json::raw_data_inventory_sha256"
+  },
+  "model_config": {
+    "penalty": "elasticnet",
+    "C": 0.05,
+    "l1_ratio": 0.5,
+    "solver": "saga",
+    "max_iter": 4000
+  },
+  "random_seed": 42,
+  "walk_forward": {
+    "n_folds": 5,
+    "embargo_bars": 100,
+    "purge_bars": 60,
+    "mode": "expanding"
+  },
+  "test_split": "LOCKED -- never read by src/research"
+}

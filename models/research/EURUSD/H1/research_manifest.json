@@ -1,0 +1,285 @@
+{
+  "generated_at_utc": "2026-08-26T21:54:18.188045+00:00",
+  "environment": {
+    "python": "3.11.15",
+    "platform": "Linux-6.18.44-fc-v21-x86_64-with-glibc2.39",
+    "numpy": "2.4.6",
+    "pandas": "2.3.3",
+    "sklearn": "1.9.0",
+    "xgboost": "3.2.0",
+    "seed": 42,
+    "git_commit": "6d6e0ba127786764411eb204c7911877b4d7a57c",
+    "provenance_hashes": {
+      "config_features_yaml": "5ca9173775f5384a731a048ad7930969e4d4b527f427f0a7d676c2c5ca8765b9",
+      "config_target_yaml": "f888c7d8ed17308524b18ce3e4cc6a58fb5364d41f22cc73d0cf15e3285b3980",
+      "config_training_yaml": "2821f6bd9c19e36f3c10e18b1a82845ea7b76c9e1c441fca3874253e633707ef",
+      "config_timeframes_yaml": "3edac0d1b62b3fb4006a693677a2cff4e9b018b46c67129faa219efe41f18a56",
+      "config_symbols_yaml": "b1fb52882e17225f0029ca799ca975f5054ff0b37302d0f13afa8758219945a8",
+      "phase3_feature_manifest": "949efce17e422632c6564273eef3bc34367c2522fc1aec49d2e1cf37315af679",
+      "phase4_target_spec": "5499d10a78bf699f50a00d70526e45f943b42dae7c7ad93b1019c4bb9240d54c",
+      "src_research_tree": "b0add5db0e6f6a46297317c5bd8814226aac67ae1faf9c7036da8437d1381ab9"
+    }
+  },
+  "symbol": "EURUSD",
+  "entry_timeframe": "H1",
+  "selection": {
+    "feature_set": "scale_free_dedup_nodir",
+    "model": "extratrees",
+    "weighting": "uniqueness",
+    "n_features": 80,
+    "dev_auc_mean": 0.5152204689081963,
+    "dev_auc_std": 0.008029173907728344,
+    "dev_train_val_gap": 0.0909256362828587,
+    "selection_score": 0.48847447288361745,
+    "runners_up": [
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "extratrees",
+        "weighting": "none",
+        "score": 0.4836881514878716
+      },
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_en",
+        "weighting": "uniqueness",
+        "score": 0.47805721513084
+      },
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "xgb_stump",
+        "weighting": "uniqueness",
+        "score": 0.4725895003485401
+      }
+    ]
+  },
+  "feature_set": "scale_free_dedup_nodir",
+  "features": [
+    "rsi",
+    "trend_strength",
+    "trend_score",
+    "momentum_score",
+    "volatility_score",
+    "market_regime",
+    "session_asian",
+    "session_london",
+    "session_newyork",
+    "direction",
+    "return_1",
+    "return_3",
+    "return_5",
+    "distance_from_recent_high",
+    "distance_from_recent_low",
+    "rolling_volatility",
+    "adx",
+    "plus_di",
+    "minus_di",
+    "bb_width",
+    "bb_percent_b",
+    "stochastic_k",
+    "stochastic_d",
+    "range_atr",
+    "body_atr",
+    "upper_wick_atr",
+    "lower_wick_atr",
+    "distance_close_ema50_atr",
+    "distance_from_day_high",
+    "distance_from_day_low",
+    "day_range_atr",
+    "position_in_day_range",
+    "return_acceleration_1_3",
+    "return_acceleration_3_5",
+    "close_to_sma20_atr",
+    "atr_pct",
+    "hour_of_day",
+    "day_of_week",
+    "spread_relative",
+    "H4_rsi",
+    "H4_trend_strength",
+    "H4_trend_score",
+    "H4_momentum_score",
+    "H4_volatility_score",
+    "H4_market_regime",
+    "H4_session_asian",
+    "H4_session_london",
+    "H4_session_newyork",
+    "H4_direction",
+    "H4_return_1",
+    "H4_return_3",
+    "H4_return_5",
+    "H4_distance_from_recent_high",
+    "H4_distance_from_recent_low",
+    "H4_rolling_volatility",
+    "H4_adx",
+    "H4_plus_di",
+    "H4_minus_di",
+    "H4_bb_width",
+    "H4_bb_percent_b",
+    "H4_stochastic_k",
+    "H4_stochastic_d",
+    "H4_range_atr",
+    "H4_body_atr",
+    "H4_upper_wick_atr",
+    "H4_lower_wick_atr",
+    "H4_distance_close_ema50_atr",
+    "H4_distance_from_day_high",
+    "H4_distance_from_day_low",
+    "H4_day_range_atr",
+    "H4_position_in_day_range",
+    "H4_return_acceleration_1_3",
+    "H4_return_acceleration_3_5",
+    "H4_close_to_sma20_atr",
+    "H4_atr_pct",
+    "H4_hour_of_day",
+    "H4_day_of_week",
+    "H4_spread_relative",
+    "trend_alignment_score",
+    "H1_H4_trend_agreement"
+  ],
+  "calibration": {
+    "method": "isotonic",
+    "candidates": {
+      "sigmoid": {
+        "brier": 0.231974758530263,
+        "ece": 4.344654425114669e-07
+      },
+      "isotonic": {
+        "brier": 0.23144075909912362,
+        "ece": 1.1020573962773277e-16
+      }
+    },
+    "fitted_on": "development out-of-fold predictions"
+  },
+  "threshold": {
+    "selected_on": "development out-of-fold only",
+    "threshold": 0.391304347826087,
+    "oof_precision": 0.42792792792792794,
+    "oof_selected_share": 0.060473985290111686
+  },
+  "development": {
+    "dev_auc_mean": 0.5152204689081963,
+    "dev_auc_std": 0.008029173907728344,
+    "dev_train_val_gap": 0.0909256362828587,
+    "folds_above_half": 5,
+    "n_folds": 5,
+    "dev_ci_lo": 0.4949973613864123,
+    "dev_ci_hi": 0.5284101818446957,
+    "dev_pooled_auc": 0.5083516605128284
+  },
+  "validation": {
+    "accuracy": 0.6364414029084687,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "roc_auc": 0.5250173940543958,
+    "pr_auc": 0.38990017511262964,
+    "log_loss": 0.654555927995879,
+    "brier": 0.2309763545121801,
+    "ece": 0.00025964263053590564,
+    "n": 1169,
+    "base_rate": 0.3635585970915312,
+    "prior_log_loss": 0.6554382414475196,
+    "prior_brier": 0.23138374357236896,
+    "beats_prior_log_loss": true,
+    "beats_prior_brier": true,
+    "train_roc_auc": 0.6047963621984974,
+    "train_val_gap": 0.07977896814410157,
+    "calibrated_brier": 0.23105356349174314,
+    "calibrated_ece": 0.0028837041821654407,
+    "calibrated_log_loss": 0.6547075965184835
+  },
+  "validation_ci": {
+    "auc": 0.5250173940543958,
+    "lo": 0.49365294843948004,
+    "hi": 0.5534524121927603,
+    "boot_mean": 0.5262106787176278,
+    "boot_std": 0.016150912309736698,
+    "n_boot": 300
+  },
+  "alternative_target": {
+    "label": "TP 2.5xATR before SL 1.5xATR within 18 bars (18.0h)",
+    "verdict": "NO_SIGNAL",
+    "verdict_reasons": [
+      "block-permutation null on the shortened label: observed 0.5372 vs null mean 0.5018, p=0.1244, q=0.2799 across 9 datasets -> NO_EVIDENCE"
+    ],
+    "horizon_bars": 18,
+    "frozen_horizon_bars": 72,
+    "n_train": 5672,
+    "n_val": 962,
+    "base_rate": 0.3494,
+    "effective_labels": 428.7,
+    "dev_auc_mean": 0.5352489086556994,
+    "dev_auc_std": 0.021281071368570038,
+    "folds_above_half": 5,
+    "n_folds": 5,
+    "dev_train_val_gap": 0.054184496735918165,
+    "validation": {
+      "accuracy": 0.6455301455301455,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "roc_auc": 0.5245229291512601,
+      "pr_auc": 0.3775820793117469,
+      "log_loss": 0.6520200577361605,
+      "brier": 0.22958932375888952,
+      "ece": 0.030701561843665282,
+      "n": 962,
+      "base_rate": 0.35446985446985446,
+      "prior_log_loss": 0.6501698283846571,
+      "prior_brier": 0.22882097674197466,
+      "beats_prior_log_loss": false,
+      "train_roc_auc": 0.5818920419274828,
+      "train_val_gap": 0.0573691127762227
+    }
+  },
+  "verdict": "NO_SIGNAL",
+  "verdict_reasons": [
+    "block-permutation null: observed 0.5213 vs null mean 0.5019, p=0.2425 (76.0th percentile) -> NO_EVIDENCE",
+    "development ROC-AUC 0.5152 +/- 0.0080 over 5 purged windows, 5/5 above 0.5",
+    "block-bootstrap 95% CI on pooled out-of-fold AUC: [0.4950, 0.5284]",
+    "train/development AUC gap +0.091 (within the 0.10 bar)",
+    "14% of the calendar survives the eligibility mask",
+    "361 independent label episodes in TRAIN"
+  ],
+  "dataset_hashes": {
+    "train": {
+      "recorded": "579a8ee4a0d452e267c8fa6157c74944f47e518aea495e9dcc4120dde4d48414",
+      "actual": "579a8ee4a0d452e267c8fa6157c74944f47e518aea495e9dcc4120dde4d48414",
+      "match": true
+    },
+    "validation": {
+      "recorded": "354b3280a78485587b11b7d7beba68eaf7d3159477b9dec199e87de4e019fa14",
+      "actual": "354b3280a78485587b11b7d7beba68eaf7d3159477b9dec199e87de4e019fa14",
+      "match": true
+    },
+    "test": {
+      "recorded": "8f690f9a29208ccef47e99b1f2aa15b47d97642201dea1a5d913dcbd7b3e5932",
+      "actual": "8f690f9a29208ccef47e99b1f2aa15b47d97642201dea1a5d913dcbd7b3e5932",
+      "match": true
+    },
+    "build_mode": "REAL"
+  },
+  "source_dataset_manifest_schema_hash": "556d63bd084676e124470801e72616da0a68bab47d745bf4b88da0b3e99ca40c",
+  "source_dataset_provenance": {
+    "phase3_feature_manifest_sha256": "50fbf12ac27a29e8c21199d437a6591de6e435a4f1377dec9bdd6e0b3fdcf656",
+    "phase4_target_spec_sha256": "8bb637ca2c92cce04bb5edf3b253738aa8866b6c2d56d4c37107a9473683b985",
+    "config/training.yaml": "22baa6ba67aa0ee37910dd06592bab4f6a4286eea52522d657b0e8b64c29826b",
+    "config/target.yaml": "78dfff34c787474942e2b44ea3540472098eb50be321ea0dca2c49fcf7835e41",
+    "raw_inventory_ref": "data/reports/feature_engineering/phase3_feature_manifest.json::raw_data_inventory_sha256"
+  },
+  "model_config": {
+    "_lib": "et",
+    "n_estimators": 400,
+    "max_depth": 6,
+    "min_samples_leaf": 50,
+    "max_features": "sqrt",
+    "bootstrap": true
+  },
+  "random_seed": 42,
+  "walk_forward": {
+    "n_folds": 5,
+    "embargo_bars": 100,
+    "purge_bars": 72,
+    "mode": "expanding"
+  },
+  "test_split": "LOCKED -- never read by src/research"
+}
