@@ -1,0 +1,287 @@
+{
+  "generated_at_utc": "2026-08-26T21:54:56.637523+00:00",
+  "environment": {
+    "python": "3.11.15",
+    "platform": "Linux-6.18.44-fc-v21-x86_64-with-glibc2.39",
+    "numpy": "2.4.6",
+    "pandas": "2.3.3",
+    "sklearn": "1.9.0",
+    "xgboost": "3.2.0",
+    "seed": 42,
+    "git_commit": "6d6e0ba127786764411eb204c7911877b4d7a57c",
+    "provenance_hashes": {
+      "config_features_yaml": "5ca9173775f5384a731a048ad7930969e4d4b527f427f0a7d676c2c5ca8765b9",
+      "config_target_yaml": "f888c7d8ed17308524b18ce3e4cc6a58fb5364d41f22cc73d0cf15e3285b3980",
+      "config_training_yaml": "2821f6bd9c19e36f3c10e18b1a82845ea7b76c9e1c441fca3874253e633707ef",
+      "config_timeframes_yaml": "3edac0d1b62b3fb4006a693677a2cff4e9b018b46c67129faa219efe41f18a56",
+      "config_symbols_yaml": "b1fb52882e17225f0029ca799ca975f5054ff0b37302d0f13afa8758219945a8",
+      "phase3_feature_manifest": "949efce17e422632c6564273eef3bc34367c2522fc1aec49d2e1cf37315af679",
+      "phase4_target_spec": "5499d10a78bf699f50a00d70526e45f943b42dae7c7ad93b1019c4bb9240d54c",
+      "src_research_tree": "b0add5db0e6f6a46297317c5bd8814226aac67ae1faf9c7036da8437d1381ab9"
+    }
+  },
+  "symbol": "XAUUSD",
+  "entry_timeframe": "H1",
+  "selection": {
+    "feature_set": "scale_free_dedup",
+    "model": "logit_en",
+    "weighting": "none",
+    "n_features": 83,
+    "dev_auc_mean": 0.503411933210209,
+    "dev_auc_std": 0.029227998851744312,
+    "dev_train_val_gap": 0.04563289837752851,
+    "selection_score": 0.47738970918995477,
+    "runners_up": [
+      {
+        "feature_set": "scale_free_dedup",
+        "model": "logit_l2",
+        "weighting": "none",
+        "score": 0.4746540423072319
+      },
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_l2",
+        "weighting": "uniqueness",
+        "score": 0.47405248206888756
+      },
+      {
+        "feature_set": "scale_free_dedup_nodir",
+        "model": "logit_en",
+        "weighting": "uniqueness",
+        "score": 0.4735239678804127
+      }
+    ]
+  },
+  "feature_set": "scale_free_dedup",
+  "features": [
+    "entry_direction",
+    "rsi",
+    "trend_strength",
+    "trend_score",
+    "momentum_score",
+    "volatility_score",
+    "market_regime",
+    "session_asian",
+    "session_london",
+    "session_newyork",
+    "direction",
+    "return_1",
+    "return_3",
+    "return_5",
+    "distance_from_recent_high",
+    "distance_from_recent_low",
+    "rolling_volatility",
+    "adx",
+    "plus_di",
+    "minus_di",
+    "bb_width",
+    "bb_percent_b",
+    "stochastic_k",
+    "stochastic_d",
+    "range_atr",
+    "body_atr",
+    "upper_wick_atr",
+    "lower_wick_atr",
+    "distance_close_ema50_atr",
+    "distance_from_day_high",
+    "distance_from_day_low",
+    "day_range_atr",
+    "position_in_day_range",
+    "return_acceleration_1_3",
+    "return_acceleration_3_5",
+    "close_to_sma20_atr",
+    "atr_pct",
+    "hour_of_day",
+    "day_of_week",
+    "minutes_from_session_open",
+    "spread_relative",
+    "H4_rsi",
+    "H4_trend_strength",
+    "H4_trend_score",
+    "H4_momentum_score",
+    "H4_volatility_score",
+    "H4_market_regime",
+    "H4_session_asian",
+    "H4_session_london",
+    "H4_session_newyork",
+    "H4_direction",
+    "H4_return_1",
+    "H4_return_3",
+    "H4_return_5",
+    "H4_distance_from_recent_high",
+    "H4_distance_from_recent_low",
+    "H4_rolling_volatility",
+    "H4_adx",
+    "H4_plus_di",
+    "H4_minus_di",
+    "H4_bb_width",
+    "H4_bb_percent_b",
+    "H4_stochastic_k",
+    "H4_stochastic_d",
+    "H4_range_atr",
+    "H4_body_atr",
+    "H4_upper_wick_atr",
+    "H4_lower_wick_atr",
+    "H4_distance_close_ema50_atr",
+    "H4_distance_from_day_high",
+    "H4_distance_from_day_low",
+    "H4_day_range_atr",
+    "H4_position_in_day_range",
+    "H4_return_acceleration_1_3",
+    "H4_return_acceleration_3_5",
+    "H4_close_to_sma20_atr",
+    "H4_atr_pct",
+    "H4_hour_of_day",
+    "H4_day_of_week",
+    "H4_minutes_from_session_open",
+    "H4_spread_relative",
+    "trend_alignment_score",
+    "H1_H4_trend_agreement"
+  ],
+  "calibration": {
+    "method": "isotonic",
+    "candidates": {
+      "sigmoid": {
+        "brier": 0.23237696967959354,
+        "ece": 2.662201022457511e-05
+      },
+      "isotonic": {
+        "brier": 0.23222771876514078,
+        "ece": 5.460751407444435e-10
+      }
+    },
+    "fitted_on": "development out-of-fold predictions"
+  },
+  "threshold": {
+    "selected_on": "development out-of-fold only",
+    "threshold": 0.3782969103240391,
+    "oof_precision": 0.3787991104521868,
+    "oof_selected_share": 0.18416382252559726
+  },
+  "development": {
+    "dev_auc_mean": 0.503411933210209,
+    "dev_auc_std": 0.029227998851744312,
+    "dev_train_val_gap": 0.04563289837752851,
+    "folds_above_half": 2,
+    "n_folds": 5,
+    "dev_ci_lo": 0.47813506448548715,
+    "dev_ci_hi": 0.5253172253306552,
+    "dev_pooled_auc": 0.5015858808243404
+  },
+  "validation": {
+    "accuracy": 0.6264529058116233,
+    "precision": 0.0,
+    "recall": 0.0,
+    "f1": 0.0,
+    "roc_auc": 0.5792508628998377,
+    "pr_auc": 0.4320457232080244,
+    "log_loss": 0.6554587326795938,
+    "brier": 0.23148234219714747,
+    "ece": 0.02898898344661557,
+    "n": 2495,
+    "base_rate": 0.3735470941883767,
+    "prior_log_loss": 0.6608165509769061,
+    "prior_brier": 0.23400966261179676,
+    "beats_prior_log_loss": true,
+    "beats_prior_brier": true,
+    "train_roc_auc": 0.5438662592371726,
+    "train_val_gap": -0.03538460366266516,
+    "calibrated_brier": 0.23355103064544772,
+    "calibrated_ece": 0.005753183818689157,
+    "calibrated_log_loss": 0.6598317268262103
+  },
+  "validation_ci": {
+    "auc": 0.5792508628998377,
+    "lo": 0.5093489106179089,
+    "hi": 0.6299779239269717,
+    "boot_mean": 0.5725717283226692,
+    "boot_std": 0.031305701170899675,
+    "n_boot": 300
+  },
+  "alternative_target": {
+    "label": "TP 2.5xATR before SL 1.5xATR within 18 bars (18.0h)",
+    "verdict": "NO_SIGNAL",
+    "verdict_reasons": [
+      "block-permutation null on the shortened label: observed 0.5254 vs null mean 0.4989, p=0.1990, q=0.3582 across 9 datasets -> NO_EVIDENCE"
+    ],
+    "horizon_bars": 18,
+    "frozen_horizon_bars": 72,
+    "n_train": 10589,
+    "n_val": 2128,
+    "base_rate": 0.3506,
+    "effective_labels": 860.6,
+    "dev_auc_mean": 0.5150077960749286,
+    "dev_auc_std": 0.01347825443036435,
+    "folds_above_half": 4,
+    "n_folds": 5,
+    "dev_train_val_gap": 0.047608731381395694,
+    "validation": {
+      "accuracy": 0.6461466165413534,
+      "precision": 0.0,
+      "recall": 0.0,
+      "f1": 0.0,
+      "roc_auc": 0.5458756489194736,
+      "pr_auc": 0.3956818912803905,
+      "log_loss": 0.6518633298561477,
+      "brier": 0.2291246838576463,
+      "ece": 0.023130246809752397,
+      "n": 2128,
+      "base_rate": 0.35385338345864664,
+      "prior_log_loss": 0.6497994550565802,
+      "prior_brier": 0.2286411664735146,
+      "beats_prior_log_loss": false,
+      "train_roc_auc": 0.5551987678466317,
+      "train_val_gap": 0.009323118927158092
+    }
+  },
+  "verdict": "NO_SIGNAL",
+  "verdict_reasons": [
+    "block-permutation null: observed 0.5471 vs null mean 0.5230, p=0.3289 (67.3th percentile) -> NO_EVIDENCE",
+    "development ROC-AUC 0.5034 +/- 0.0292 over 5 purged windows, 2/5 above 0.5",
+    "block-bootstrap 95% CI on pooled out-of-fold AUC: [0.4781, 0.5253]",
+    "train/development AUC gap +0.046 (within the 0.10 bar)",
+    "27% of the calendar survives the eligibility mask",
+    "738 independent label episodes in TRAIN"
+  ],
+  "dataset_hashes": {
+    "train": {
+      "recorded": "87d903456f6da0f21bbc357114f4afcc294f8fab7ff87950f63f41c3c5c88a1a",
+      "actual": "87d903456f6da0f21bbc357114f4afcc294f8fab7ff87950f63f41c3c5c88a1a",
+      "match": true
+    },
+    "validation": {
+      "recorded": "a636c45fc11c28e0346d0c47cbc7971cb6e16ad519096e5127f43e11dcc520e9",
+      "actual": "a636c45fc11c28e0346d0c47cbc7971cb6e16ad519096e5127f43e11dcc520e9",
+      "match": true
+    },
+    "test": {
+      "recorded": "83cc8b72086b1a8178a8e07d7a1225076ab93cc7d26e0144a2f5142b5f34fbea",
+      "actual": "83cc8b72086b1a8178a8e07d7a1225076ab93cc7d26e0144a2f5142b5f34fbea",
+      "match": true
+    },
+    "build_mode": "REAL"
+  },
+  "source_dataset_manifest_schema_hash": "556d63bd084676e124470801e72616da0a68bab47d745bf4b88da0b3e99ca40c",
+  "source_dataset_provenance": {
+    "phase3_feature_manifest_sha256": "50fbf12ac27a29e8c21199d437a6591de6e435a4f1377dec9bdd6e0b3fdcf656",
+    "phase4_target_spec_sha256": "8bb637ca2c92cce04bb5edf3b253738aa8866b6c2d56d4c37107a9473683b985",
+    "config/training.yaml": "22baa6ba67aa0ee37910dd06592bab4f6a4286eea52522d657b0e8b64c29826b",
+    "config/target.yaml": "78dfff34c787474942e2b44ea3540472098eb50be321ea0dca2c49fcf7835e41",
+    "raw_inventory_ref": "data/reports/feature_engineering/phase3_feature_manifest.json::raw_data_inventory_sha256"
+  },
+  "model_config": {
+    "penalty": "elasticnet",
+    "C": 0.05,
+    "l1_ratio": 0.5,
+    "solver": "saga",
+    "max_iter": 4000
+  },
+  "random_seed": 42,
+  "walk_forward": {
+    "n_folds": 5,
+    "embargo_bars": 100,
+    "purge_bars": 72,
+    "mode": "expanding"
+  },
+  "test_split": "LOCKED -- never read by src/research"
+}

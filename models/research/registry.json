@@ -1,0 +1,123 @@
+{
+  "models": [
+    {
+      "feature_count": 80,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "f0ded2146f85c584b5ad7a5d03d660819141e993a855c04c45726efb4f588896",
+      "model_id": "research_v2__EURUSD__H1",
+      "path": "models/research/EURUSD/H1",
+      "research_verdict": "NO_SIGNAL",
+      "status": "RESEARCH",
+      "symbol": "EURUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 72 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "H1",
+      "version": "research_v2"
+    },
+    {
+      "feature_count": 40,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "2c08c1868ff290c1bc21e21a3e728072113376e9519d2e4371bf99c9320ec60c",
+      "model_id": "research_v2__EURUSD__H4",
+      "path": "models/research/EURUSD/H4",
+      "research_verdict": "DROP",
+      "status": "RESEARCH",
+      "symbol": "EURUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 60 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "H4",
+      "version": "research_v2"
+    },
+    {
+      "feature_count": 125,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "4a8b8b295e642f20971c917a3aef3e5527be9fbb58cdd8cca4f4dd35dda642bb",
+      "model_id": "research_v2__EURUSD__M15",
+      "path": "models/research/EURUSD/M15",
+      "research_verdict": "NO_SIGNAL",
+      "status": "RESEARCH",
+      "symbol": "EURUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 96 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "M15",
+      "version": "research_v2"
+    },
+    {
+      "feature_count": 81,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "ed47147fd3e49439368b50cc9128ca45ea6cb1f2edfebd9480929c174b29f08a",
+      "model_id": "research_v2__GBPUSD__H1",
+      "path": "models/research/GBPUSD/H1",
+      "research_verdict": "NO_SIGNAL",
+      "status": "RESEARCH",
+      "symbol": "GBPUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 72 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "H1",
+      "version": "research_v2"
+    },
+    {
+      "feature_count": 40,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "79c7ea87acde9de362ede5412e53d18d592ea8cf09a269e8c071884865d26dbf",
+      "model_id": "research_v2__GBPUSD__H4",
+      "path": "models/research/GBPUSD/H4",
+      "research_verdict": "NO_SIGNAL",
+      "status": "RESEARCH",
+      "symbol": "GBPUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 60 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "H4",
+      "version": "research_v2"
+    },
+    {
+      "feature_count": 123,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "cec6b398d80a6092ff317c27e901c1d49dfce9080b319b1d50fb1d88ef9f803b",
+      "model_id": "research_v2__GBPUSD__M15",
+      "path": "models/research/GBPUSD/M15",
+      "research_verdict": "NO_SIGNAL",
+      "status": "RESEARCH",
+      "symbol": "GBPUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 96 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "M15",
+      "version": "research_v2"
+    },
+    {
+      "feature_count": 83,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "c7c0b962c2da34e80e7550438f1991bd0c709dd008727549986a5fac00a37725",
+      "model_id": "research_v2__XAUUSD__H1",
+      "path": "models/research/XAUUSD/H1",
+      "research_verdict": "NO_SIGNAL",
+      "status": "RESEARCH",
+      "symbol": "XAUUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 72 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "H1",
+      "version": "research_v2"
+    },
+    {
+      "feature_count": 40,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "1b118197ee5be40c4a03dd032aba0c319ce02dfbe68da83648e4230844e03892",
+      "model_id": "research_v2__XAUUSD__H4",
+      "path": "models/research/XAUUSD/H4",
+      "research_verdict": "NO_SIGNAL",
+      "status": "RESEARCH",
+      "symbol": "XAUUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 60 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "H4",
+      "version": "research_v2"
+    },
+    {
+      "feature_count": 128,
+      "feature_schema_version": "research-1.2.0",
+      "model_hash": "1531c35b60de855bb2528cd4d93867907cd399c35c45b26acbfa3776f138e524",
+      "model_id": "research_v2__XAUUSD__M15",
+      "path": "models/research/XAUUSD/M15",
+      "research_verdict": "NO_SIGNAL",
+      "status": "RESEARCH",
+      "symbol": "XAUUSD",
+      "target": "TP at 2.5xATR(14) touched before SL at 1.5xATR(14), both fixed from the ATR at the entry bar, within 96 bars of the entry timeframe; ambiguous same-bar resolutions excluded",
+      "timeframe": "M15",
+      "version": "research_v2"
+    }
+  ],
+  "note": "Offline research integration only. No PRODUCTION status exists here and nothing in this registry is wired to live trading.",
+  "schema": "kairos-research-registry-1"
+}
