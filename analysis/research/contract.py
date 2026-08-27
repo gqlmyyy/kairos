@@ -234,6 +234,19 @@ FEATURE_LIBRARY: Dict[str, FeatureSpec] = {f.name: f for f in [
     *[_spec(f"return_acceleration_{a}_{b}", _OH, f"return_{a} - return_{b}", b, _F, _D,
             "difference of two fractional returns", _W, SCALE_FREE, ["close"])
       for a, b in zip(RETURN_PERIODS, RETURN_PERIODS[1:])],
+    # ATR-normalised returns. research_v2's models used only the de-duplicated
+    # feature set, where these were dropped as near-duplicates of `return_n`;
+    # research_v3 also compares the full scale-free set, which keeps them. They
+    # are scale-free either way -- a price change divided by ATR carries no
+    # price unit -- so the contract describes them rather than excluding them.
+    *[_spec(f"return_{n}_atr", _OH, f"close.diff({n}) / ATR({ATR_PERIOD})",
+            max(n, ATR_PERIOD), _F, _D, f"divided by ATR({ATR_PERIOD})", _W, SCALE_FREE,
+            ["close", "high", "low"]) for n in RETURN_PERIODS],
+    _spec("normalized_returns", _OH, f"close.diff() / ATR({ATR_PERIOD})",
+          ATR_PERIOD, _F, _D, f"divided by ATR({ATR_PERIOD})", _W, SCALE_FREE,
+          ["close", "high", "low"]),
+    _spec("log_return_1", _OH, "ln(close / close.shift(1))", 1, _F, _D,
+          "log ratio of consecutive closes", _W, SCALE_FREE, ["close"]),
     # ---- trend -------------------------------------------------------------
     _spec("trend_strength", _OH, f"(EMA({EMA_FAST}) - EMA({EMA_SLOW})) / close",
           EMA_SLOW, _F, _D, "divided by close", _W, SCALE_FREE, ["close"]),
@@ -334,16 +347,29 @@ FEATURE_LIBRARY: Dict[str, FeatureSpec] = {f.name: f for f in [
 
 #: Names the contract knows but which are NOT scale-free. Listed explicitly so
 #: that a request for one fails with "excluded by evidence", not "unknown".
+#: Every entry must be a non-stationary class -- a scale-free feature belongs in
+#: FEATURE_LIBRARY, and putting one here would produce a refusal whose stated
+#: reason is false. Asserted at import.
 EXCLUDED_NON_STATIONARY: Dict[str, str] = {
     "atr": PRICE_UNIT, "macd_line": PRICE_UNIT, "macd_signal": PRICE_UNIT,
     "macd_histogram": PRICE_UNIT, "range": PRICE_UNIT, "body_size": PRICE_UNIT,
     "upper_wick": PRICE_UNIT, "lower_wick": PRICE_UNIT, "day_range": PRICE_UNIT,
-    "normalized_returns": SCALE_FREE,  # scale-free but deduped away as a duplicate
     "ema_20": LEVEL, "ema_50": LEVEL, "sma_20": LEVEL,
     "bb_upper": LEVEL, "bb_lower": LEVEL,
     "resistance_level": LEVEL, "support_level": LEVEL,
     "spread_points": BROKER_UNIT, "spread_ma": BROKER_UNIT,
 }
+
+if any(k in FEATURE_LIBRARY for k in EXCLUDED_NON_STATIONARY):
+    _overlap = sorted(set(EXCLUDED_NON_STATIONARY) & set(FEATURE_LIBRARY))
+    raise ContractError(
+        f"{_overlap} are both described and excluded; a feature cannot be two things")
+if any(v not in NON_STATIONARY for v in EXCLUDED_NON_STATIONARY.values()):
+    _bad = sorted(k for k, v in EXCLUDED_NON_STATIONARY.items() if v not in NON_STATIONARY)
+    raise ContractError(
+        f"{_bad} are listed as excluded but classified scale-free; the refusal "
+        f"message would state a reason that is not true")
+
 
 # --- meta and cross-timeframe features --------------------------------------
 
@@ -435,11 +461,12 @@ def resolve(name: str, entry_timeframe: str) -> FeatureSpec:
         tf = ctx or entry_timeframe
         return spec.renamed(name, tf) if ctx else spec.renamed(name, tf)
     if base in EXCLUDED_NON_STATIONARY:
+        klass = EXCLUDED_NON_STATIONARY[base]
         raise ContractError(
-            f"{name!r} is a {EXCLUDED_NON_STATIONARY[base]} feature and is excluded "
-            f"from the research contract by evidence: its support moves with the "
-            f"instrument's price level, so a split learned on it does not transfer. "
-            f"See the module docstring.")
+            f"{name!r} is a {klass} feature and is excluded from the research "
+            f"contract by evidence: its support moves with the instrument's price "
+            f"level (or, for {BROKER_UNIT}, with the feed), so a split learned on it "
+            f"does not transfer across price regimes. See the module docstring.")
     raise ContractError(
         f"{name!r} is not covered by the research feature contract. Add an explicit "
         f"entry to FEATURE_LIBRARY — a column must never be contracted by guesswork.")

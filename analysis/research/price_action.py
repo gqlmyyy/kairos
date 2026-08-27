@@ -62,6 +62,11 @@ def rolling_volatility(close: pd.Series, lookback: int) -> pd.Series:
     return close.pct_change().rolling(window=lookback, min_periods=lookback).std()
 
 
+def return_in_atr(close: pd.Series, period: int, atr_series: pd.Series) -> pd.Series:
+    """Price change over `period` bars in ATR units. `diff` looks backwards only."""
+    return close.diff(periods=period) / atr_series.replace(0.0, np.nan)
+
+
 def atr_percent(atr_series: pd.Series, close: pd.Series) -> pd.Series:
     return atr_series / close.replace(0.0, np.nan)
 

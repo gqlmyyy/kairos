@@ -73,6 +73,7 @@ def replay(
     source: cd.CandleSource,
     *,
     registry_path=None,
+    version: Optional[str] = None,
     start: Optional[str] = None,
     end: Optional[str] = None,
     limit: Optional[int] = None,
@@ -86,6 +87,9 @@ def replay(
     before ``start`` is still needed to warm the lookback windows, and
     trimming it would change every rolling value.
 
+    ``version`` names the research generation when more than one is registered
+    for this symbol/timeframe; the registry refuses to choose on its own.
+
     ``limit`` scores the FIRST n rows of the range, ``tail`` the LAST n. On a
     short history the first rows are still inside their lookback windows and
     correctly produce no prediction, so ``tail`` is usually what a caller
@@ -95,6 +99,8 @@ def replay(
         raise ValueError("pass limit or tail, not both")
     if model is None:
         kwargs = {} if registry_path is None else {"registry_path": registry_path}
+        if version is not None:
+            kwargs["version"] = version
         model = load_model(symbol, timeframe, **kwargs)
 
     stack_tfs = [model.timeframe, *model.card.context_timeframes]

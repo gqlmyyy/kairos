@@ -38,7 +38,11 @@ from analysis.research import contract as C  # noqa: E402
 from analysis.research import model_card as mc  # noqa: E402
 from analysis.research import model_registry as reg  # noqa: E402
 
-RESEARCH_SUBDIR = "models/research_v2"
+#: Both research artifact layouts this importer understands. research_v2
+#: shipped barrier models only; research_v3 also ships hold-to-horizon return
+#: models and carries its own gate results and out-of-sample record.
+RESEARCH_SUBDIRS = {"research_v2": "models/research_v2",
+                    "research_v3": "models/research_v3"}
 DEST_ROOT = Path("models/research")
 
 # The frozen research target. These are read from the research repo's
@@ -71,6 +75,31 @@ def _load_target_config(source: Path) -> tuple:
     sl = float(rr.get("sl_atr_multiple", SL_ATR_MULTIPLE))
     horizons = {k: int(v) for k, v in raw.get("max_holding_horizon_bars", {}).items()}
     return tp, sl, (horizons or dict(HORIZON_BARS))
+
+
+#: Research classification -> the registry status an import may write.
+#: Anything unrecognised lands on RESEARCH: an unknown verdict is not evidence.
+_IMPORT_STATUS = {
+    "PRODUCTION_ELIGIBLE": reg.VALIDATED,   # deliberately one rung DOWN
+    "VALIDATED": reg.VALIDATED,
+    "CANDIDATE": reg.CANDIDATE,
+    "RESEARCH": reg.RESEARCH,
+    "NO_SIGNAL": reg.RESEARCH,
+    "DROP": reg.RESEARCH,
+}
+
+
+def _import_status(verdict: str) -> str:
+    """The status this import writes. Never PRODUCTION_ELIGIBLE.
+
+    Even a model the research repository classified PRODUCTION_ELIGIBLE lands
+    at VALIDATED here. KAIROS re-checks the evidence itself and requires a
+    countersigned approval before that last rung; a status copied across a
+    repository boundary is a claim, not a check.
+    """
+    status = _IMPORT_STATUS.get(str(verdict).upper(), reg.RESEARCH)
+    assert status not in reg.GATED_STATUSES, "an import must never write a gated status"
+    return status
 
 
 def build_card(manifest: dict, model_path: Path, tp: float, sl: float,
@@ -107,6 +136,10 @@ def build_card(manifest: dict, model_path: Path, tp: float, sl: float,
         "feature_schema_version": mc.CURRENT_FEATURE_SCHEMA_VERSION,
         "feature_list": features,
         "target": TARGET_DESCRIPTION.format(tp=tp, sl=sl, h=horizon),
+        # research_v2 shipped only barrier models. research_v3 also produces
+        # hold-to-horizon return models, which mean something different and
+        # carry their own semantics string; see analysis/research/model_card.py.
+        "target_kind": mc.KIND_BARRIER,
         "horizon_bars": horizon,
         "tp_atr_multiple": tp,
         "sl_atr_multiple": sl,
@@ -116,7 +149,7 @@ def build_card(manifest: dict, model_path: Path, tp: float, sl: float,
         "target_spec_hash": (src_prov.get("phase4_target_spec_sha256")
                              or prov.get("phase4_target_spec", "")),
         "model_hash": mc.sha256_file(model_path),
-        "probability_semantics": mc.PROBABILITY_SEMANTICS,
+        "probability_semantics": mc.PROBABILITY_SEMANTICS_BY_KIND[mc.KIND_BARRIER],
         # Carried verbatim. The research repo's own verdict on every shipped
         # model is that it did not demonstrate an edge; hiding that here would
         # make the artifact look like something it is not.
@@ -135,11 +168,130 @@ def build_card(manifest: dict, model_path: Path, tp: float, sl: float,
     }
 
 
+def build_card_v3(manifest: dict, model_path: Path) -> dict:
+    """A model card from a research_v3 artifact manifest.
+
+    v3 selects the TARGET as well as the model, so the geometry, the horizon
+    and even the kind of probability differ per dataset. All of it is read from
+    the manifest; nothing is assumed, and a manifest missing any of it fails
+    the import rather than acquiring a default.
+    """
+    symbol = manifest["symbol"]
+    timeframe = manifest["entry_timeframe"]
+    features = list(manifest["features"])
+    target = manifest["target"]
+    kind = target["kind"]
+
+    contract = C.build_contract(symbol, timeframe, features)
+    C.assert_scale_free(contract)
+
+    if kind == mc.KIND_BARRIER:
+        description = (
+            f"TP at {target['tp_atr_multiple']}xATR(14) touched before SL at "
+            f"{target['sl_atr_multiple']}xATR(14), both fixed from the ATR at the "
+            f"entry bar, within {target['horizon_bars']} bars of the entry timeframe")
+    else:
+        description = (
+            f"forward move beyond {target['return_threshold_atr']}xATR(14) in the "
+            f"candidate's direction after {target['horizon_bars']} bars, held to "
+            f"the horizon with no stop")
+
+    hashes = manifest.get("dataset_hashes", {})
+    train_hash = (hashes.get("train", {}) or {}).get("actual") or \
+                 (hashes.get("train", {}) or {}).get("recorded")
+    if not train_hash:
+        raise SystemExit(f"{symbol}/{timeframe}: manifest carries no training dataset hash")
+
+    env = manifest.get("environment", {})
+    prov = env.get("provenance_hashes", {})
+    return {
+        "model_id": f"research_v3__{symbol}__{timeframe}",
+        "symbol": symbol,
+        "timeframe": timeframe,
+        "model_version": "research_v3",
+        "feature_schema_version": mc.CURRENT_FEATURE_SCHEMA_VERSION,
+        "feature_list": features,
+        "target": description,
+        "target_kind": kind,
+        "horizon_bars": int(target["horizon_bars"]),
+        "tp_atr_multiple": target.get("tp_atr_multiple"),
+        "sl_atr_multiple": target.get("sl_atr_multiple"),
+        "return_threshold_atr": target.get("return_threshold_atr"),
+        "training_dataset_hash": train_hash,
+        "feature_manifest_hash": prov.get("phase3_feature_manifest", ""),
+        "target_spec_hash": prov.get("phase4_target_spec", ""),
+        "model_hash": mc.sha256_file(model_path),
+        "probability_semantics": mc.PROBABILITY_SEMANTICS_BY_KIND[kind],
+        # The research classification, carried verbatim. KAIROS never upgrades
+        # it: PRODUCTION_ELIGIBLE requires the local gate as well.
+        "research_verdict": manifest.get("final_classification", "UNKNOWN"),
+        "calibration": (manifest.get("calibration", {}) or {}).get("method", "none"),
+        "context_timeframes": list(contract.context_timeframes),
+        "entry_direction_encoding": {"long": 1.0, "short": -1.0},
+        "source_repo_commit": env.get("git_commit", "unknown"),
+        "environment": {k: str(v) for k, v in env.items()
+                        if k in ("python", "numpy", "pandas", "sklearn", "xgboost", "seed")},
+        "decision_threshold": manifest.get("decision_threshold"),
+        "kairos_contract_fingerprint": C.contract_fingerprint(contract),
+        "research_model": manifest.get("model"),
+        "feature_set": manifest.get("feature_set"),
+        "risk_unit": target.get("risk_unit"),
+    }
+
+
+def build_research_evidence(manifest: dict) -> dict:
+    """The evidence file the KAIROS production gate reads.
+
+    Everything here is copied from the research manifest, including the gates
+    that FAILED. The gate on the KAIROS side re-checks it; this file exists so
+    that check has something to read, not so it can be satisfied.
+    """
+    econ = manifest.get("economics", {}) or {}
+    val = econ.get("validation") or {}
+    stress = econ.get("cost_stress") or {}
+    oos = manifest.get("final_oos") or {}
+    oos_metrics = oos.get("metrics") or {}
+    oos_econ = oos.get("economics") or {}
+    return {
+        "source": "xgbooost research_v3",
+        "symbol": manifest["symbol"], "timeframe": manifest["entry_timeframe"],
+        "pre_oos_classification": manifest.get("classification"),
+        "final_classification": manifest.get("final_classification"),
+        "gates": manifest.get("gates", []),
+        "null_test": manifest.get("null_test", {}),
+        "hypothesis_ledger": manifest.get("hypothesis_ledger", {}),
+        "economics": {
+            "passed": bool((val.get("net_expectancy_r") or -1) > 0
+                           and (val.get("n_trades") or 0) >= 100),
+            "net_expectancy_r": val.get("net_expectancy_r"),
+            "n_trades": val.get("n_trades"),
+            "robustness": stress.get("robustness"),
+            "survives_cost_stress": bool(stress.get("survives_stress")),
+        },
+        "final_oos": ({
+            "G8_passed": oos.get("G8_passed"),
+            "roc_auc": oos_metrics.get("roc_auc"),
+            "log_loss": oos_metrics.get("log_loss"),
+            "beats_prior_log_loss": oos.get("beats_prior_log_loss"),
+            "net_expectancy_r": oos_econ.get("net_expectancy_r"),
+            "n_trades": oos_econ.get("n_trades"),
+            "n_test": oos.get("n_test"),
+        } if oos else {}),
+        # Filled in by a golden-parity run on the KAIROS side, never here: a
+        # parity claim written by the exporter would be the exporter grading
+        # its own homework.
+        "kairos_parity": {},
+    }
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--source", required=True,
                     help="path to the xgbooost research repository")
+    ap.add_argument("--version", default="research_v2",
+                    choices=sorted(RESEARCH_SUBDIRS),
+                    help="which research artifact generation to import")
     ap.add_argument("--symbol", help="import only this symbol")
     ap.add_argument("--tf", help="import only this entry timeframe")
     ap.add_argument("--dest", default=str(DEST_ROOT), help="destination root")
@@ -147,9 +299,10 @@ def main() -> int:
     args = ap.parse_args()
 
     source = Path(args.source).expanduser().resolve()
-    research_root = source / RESEARCH_SUBDIR
+    subdir = RESEARCH_SUBDIRS[args.version]
+    research_root = source / subdir
     if not research_root.is_dir():
-        print(f"ERROR: no {RESEARCH_SUBDIR} under {source}", file=sys.stderr)
+        print(f"ERROR: no {subdir} under {source}", file=sys.stderr)
         return 2
 
     tp, sl, horizons = _load_target_config(source)
@@ -170,14 +323,28 @@ def main() -> int:
             continue
 
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        card = build_card(manifest, model_src, tp, sl, horizons)
+        evidence = None
+        if args.version == "research_v3":
+            card = build_card_v3(manifest, model_src)
+            evidence = build_research_evidence(manifest)
+        else:
+            card = build_card(manifest, model_src, tp, sl, horizons)
 
-        dest = dest_root / symbol / timeframe
+        # The status an import may write, from the research classification.
+        # PRODUCTION_ELIGIBLE is deliberately unreachable here: it needs
+        # evidence KAIROS re-checks locally plus a human approval record, and
+        # that lives in analysis/research/production_gate.py.
+        status = _import_status(card["research_verdict"])
+
+        # Version-scoped: research_v2 and research_v3 artifacts for the same
+        # symbol/timeframe are different models and must not share a directory.
+        # A flat layout let one import silently overwrite the other's bytes
+        # while both stayed registered, which is the worst of both worlds.
+        dest = dest_root / args.version / symbol / timeframe
         entry = reg.RegistryEntry(
             model_id=card["model_id"], symbol=symbol, timeframe=timeframe,
             version=card["model_version"],
-            # Always RESEARCH on import. See the module docstring.
-            status=reg.RESEARCH, path=str(dest), model_hash=card["model_hash"],
+            status=status, path=str(dest), model_hash=card["model_hash"],
             feature_schema_version=card["feature_schema_version"],
             feature_count=len(card["feature_list"]), target=card["target"],
             research_verdict=card["research_verdict"],
@@ -192,16 +359,25 @@ def main() -> int:
         shutil.copy2(model_src, dest / mc.MODEL_FILENAME)
         shutil.copy2(manifest_path, dest / mc.RESEARCH_MANIFEST_FILENAME)
         mc.write(dest, card)
+        if evidence is not None:
+            (dest / "research_evidence.json").write_text(
+                json.dumps(evidence, indent=2, sort_keys=True), encoding="utf-8")
 
     if not entries:
         print("nothing matched", file=sys.stderr)
         return 1
     if not args.dry_run:
-        path = reg.write_registry(entries, dest_root / "registry.json")
-        print(f"\nwrote {path} with {len(entries)} models, all status=RESEARCH")
+        registry_path = dest_root / "registry.json"
+        merged = reg.merge_entries(entries, registry_path)
+        path = reg.write_registry(merged, registry_path)
+        print(f"\nwrote {path}: {len(entries)} imported, {len(merged)} registered "
+              f"in total (earlier generations are kept, not replaced)")
         verdicts = sorted({e.research_verdict for e in entries})
+        statuses = sorted({e.status for e in entries})
         print(f"research verdicts present: {verdicts}")
-        print("No model is VALIDATED and nothing here is wired to live trading.")
+        print(f"registry statuses written: {statuses}")
+        print("No model is PRODUCTION_ELIGIBLE and nothing here is wired to live "
+              "trading; that status requires analysis/research/production_gate.py.")
     return 0
 
 

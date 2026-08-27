@@ -128,6 +128,13 @@ def compute_timeframe_features(
     for a, b in zip(C.RETURN_PERIODS, C.RETURN_PERIODS[1:]):
         out[f"return_acceleration_{a}_{b}"] = pa.return_acceleration(
             r[f"return_{a}"], r[f"return_{b}"])
+    # ATR-normalised returns. Near-duplicates of `return_n` and dropped by the
+    # de-duplicated feature set, but the full scale-free set keeps them, so the
+    # engine has to be able to produce them.
+    for p in C.RETURN_PERIODS:
+        out[f"return_{p}_atr"] = pa.return_in_atr(c, p, atr14)
+    out["normalized_returns"] = pa.normalize_by_atr(c.diff(), atr14)
+    out["log_return_1"] = ind.log_return(c, 1)
 
     # --- trend --------------------------------------------------------------
     out["trend_strength"] = ind.trend_strength(c, C.EMA_FAST, C.EMA_SLOW)

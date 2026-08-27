@@ -190,6 +190,19 @@ def cci(high: pd.Series, low: pd.Series, close: pd.Series, period: int) -> pd.Se
     return (tp - sma_tp) / (0.015 * mad.replace(0.0, np.nan))
 
 
+def log_return(close: pd.Series, periods: int = 1) -> pd.Series:
+    """ln(close_i / close_{i-periods}).
+
+    Time-additive, unlike pct_change. A non-positive close -- impossible for
+    these instruments, but a corrupt row must never fabricate an infinity --
+    yields NaN rather than +/-inf.
+    """
+    ratio = close / close.shift(periods=periods).replace(0.0, np.nan)
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = np.log(ratio)
+    return out.replace([np.inf, -np.inf], np.nan)
+
+
 # --- session clock ----------------------------------------------------------
 # Pure functions of the row's OWN timestamp. They never touch OHLC, so they
 # cannot look ahead under any circumstances.

@@ -15,6 +15,11 @@ import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "models" / "research" / "registry.json"
+
+#: Both research generations are registered for every symbol/timeframe, so a
+#: load has to name one. These suites exercise the mechanics, not a particular
+#: model, and pin v2 so the assertions stay stable as new generations land.
+VERSION = "research_v2"
 CANDLES = ROOT / "tests" / "fixtures" / "research" / "candles"
 
 pytestmark = pytest.mark.skipif(
@@ -35,7 +40,7 @@ PAIRS = [("XAUUSD", "H1"), ("EURUSD", "H1"), ("GBPUSD", "H4"), ("XAUUSD", "H4")]
 def test_replay_produces_probabilities_on_a_complete_source(source, symbol, timeframe):
     from analysis.research import replay as rp
 
-    result = rp.replay(symbol, timeframe, source, tail=40, registry_path=REGISTRY)
+    result = rp.replay(symbol, timeframe, source, tail=40, registry_path=REGISTRY, version=VERSION)
     assert result.served_any, result.summary()
     served = result.predictions[result.predictions["status"] == "OK"]
     assert len(served) > 0
@@ -50,8 +55,8 @@ def test_replay_is_deterministic(source, symbol, timeframe):
     """Same candles, same model, same range -> byte-identical output."""
     from analysis.research import replay as rp
 
-    a = rp.replay(symbol, timeframe, source, tail=25, registry_path=REGISTRY)
-    b = rp.replay(symbol, timeframe, source, tail=25, registry_path=REGISTRY)
+    a = rp.replay(symbol, timeframe, source, tail=25, registry_path=REGISTRY, version=VERSION)
+    b = rp.replay(symbol, timeframe, source, tail=25, registry_path=REGISTRY, version=VERSION)
     pd.testing.assert_frame_equal(a.predictions, b.predictions)
     assert a.status_counts == b.status_counts
 
@@ -62,7 +67,7 @@ def test_feature_frame_is_deterministic(source, symbol, timeframe):
     from analysis.research import engine as E
     from analysis.research.model_loader import load_model
 
-    model = load_model(symbol, timeframe, registry_path=REGISTRY)
+    model = load_model(symbol, timeframe, registry_path=REGISTRY, version=VERSION)
     tfs = [timeframe, *model.card.context_timeframes]
     frames = [
         E.build_feature_frame(symbol, timeframe, cd.load_stack(source, symbol, tfs),
@@ -80,13 +85,14 @@ def test_a_narrower_window_does_not_change_the_values_inside_it(source):
     """
     from analysis.research import replay as rp
 
-    wide = rp.replay("XAUUSD", "H1", source, tail=60, registry_path=REGISTRY)
+    wide = rp.replay("XAUUSD", "H1", source, tail=60, registry_path=REGISTRY,
+                     version=VERSION)
     served = wide.predictions[wide.predictions["status"] == "OK"]
     assert len(served) > 10
     start = served["timestamp"].iloc[5]
 
     narrow = rp.replay("XAUUSD", "H1", source, start=str(start), tail=10,
-                       registry_path=REGISTRY)
+                       registry_path=REGISTRY, version=VERSION)
     merged = narrow.predictions.merge(wide.predictions, on=["timestamp", "direction"],
                                       suffixes=("_narrow", "_wide"))
     assert len(merged) > 0
@@ -103,7 +109,7 @@ def test_replay_reports_what_it_refused(source):
         pytest.skip("no stored historical candles in this checkout")
 
     result = rp.replay("XAUUSD", "H1", bare, start="2024-06-01", limit=5,
-                       registry_path=REGISTRY)
+                       registry_path=REGISTRY, version=VERSION)
     assert result.rows_refused > 0
     assert result.rows_scored == 0
     assert "spread" in result.summary()
@@ -153,7 +159,8 @@ def test_the_replay_cli_runs_headless():
     proc = subprocess.run(
         [sys.executable, "scripts/research_replay.py", "--symbol", "XAUUSD",
          "--tf", "H1", "--source-kind", "json",
-         "--source-root", str(CANDLES), "--tail", "5", "--show", "2"],
+         "--source-root", str(CANDLES), "--tail", "5", "--show", "2",
+         "--version", VERSION],
         cwd=ROOT, capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stderr
     assert "p_win over" in proc.stdout, proc.stdout
@@ -170,13 +177,16 @@ def test_the_import_script_is_reproducible(tmp_path):
 
     proc = subprocess.run(
         [sys.executable, "scripts/import_research_model.py", "--source", str(source),
-         "--dest", str(tmp_path), "--symbol", "XAUUSD", "--tf", "H1"],
+         "--dest", str(tmp_path), "--symbol", "XAUUSD", "--tf", "H1",
+         "--version", VERSION],
         cwd=ROOT, capture_output=True, text=True, timeout=300)
     assert proc.returncode == 0, proc.stderr
 
-    fresh = json.loads((tmp_path / "XAUUSD" / "H1" / "model_card.json").read_text())
+    fresh = json.loads(
+        (tmp_path / VERSION / "XAUUSD" / "H1" / "model_card.json").read_text())
     shipped = json.loads(
-        (ROOT / "models" / "research" / "XAUUSD" / "H1" / "model_card.json").read_text())
+        (ROOT / "models" / "research" / VERSION / "XAUUSD" / "H1"
+         / "model_card.json").read_text())
     for key in ("model_id", "feature_list", "model_hash", "target", "horizon_bars",
                 "training_dataset_hash", "kairos_contract_fingerprint"):
         assert fresh[key] == shipped[key], f"{key} is not reproducible"

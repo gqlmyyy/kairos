@@ -15,10 +15,21 @@ is not done, it says so.
 |---|---|
 | Scope | Entry models only. Exit models are untouched. |
 | Execution | Offline replay on Linux from stored candles. No MT5, no broker, no account, no orders. |
-| Models integrated | 9 (`{EURUSD, GBPUSD, XAUUSD}` × `{M15, H1, H4}`), all status `RESEARCH` |
-| Research verdict | 8 × `NO_SIGNAL`, 1 × `DROP`. **No model demonstrated an edge.** |
+| Models integrated | 18 — two generations × `{EURUSD, GBPUSD, XAUUSD}` × `{M15, H1, H4}` |
+| research_v2 verdicts | 8 × `NO_SIGNAL`, 1 × `DROP` |
+| research_v3 verdicts | 7 × `NO_SIGNAL`, 1 × `DROP`, 1 × `CANDIDATE` (GBPUSD M15) |
+| `PRODUCTION_ELIGIBLE` | **None.** No model passed the gate. |
 | Production activation | None. `ML_ENTRY_ENABLED` and every other switch are unchanged. |
-| Golden parity | Bit-exact against the research engine on all 9 models |
+| Golden parity | Bit-exact (0.000e+00) against the research engine on all 18 models |
+
+**The one model with a real signal still fails.** research_v3's GBPUSD M15
+(`return_0.5atr_h24`, elastic-net) reaches validation AUC 0.5469 against a
+block-permutation null of 0.4994 ± 0.0109 — p = 0.0010, BH q = 0.0090 across
+nine datasets. It is `CANDIDATE`, not `VALIDATED`, because the best gross
+expectancy it can isolate is **+0.0073 R** against a median trading cost of
+**0.1269 R** — costs are ~17× the edge. That gap is a property of the
+instrument and timeframe, not of the model, and no threshold or retraining
+closes it.
 
 **Nothing here is evidence that any model is profitable or ready for
 production.** The research repository's own gates rejected every one of these
@@ -169,22 +180,73 @@ Every one of those checks has a test that breaks it deliberately
 
 ### Registry
 
-`models/research/registry.json`. Statuses: `RESEARCH`, `CANDIDATE`,
-`VALIDATED`, `RETIRED`. There is deliberately **no `PRODUCTION` status** —
-this integration validates offline and deploys nothing. All 9 models are
-`RESEARCH`; `VALIDATED` is a recorded human decision about a specific artifact
-hash, never a side effect of a successful import.
+`models/research/registry.json`. Five statuses, weakest first:
+
+| Status | Meaning |
+|---|---|
+| `RESEARCH` | imported and contract-checked; research found no demonstrated edge |
+| `CANDIDATE` | statistically established in research, but calibration or economics failed |
+| `VALIDATED` | passed everything through the cost-aware validation backtest |
+| `PRODUCTION_ELIGIBLE` | the above **plus** a passing one-shot out-of-sample, verified hashes, verified KAIROS parity, and a countersigned human approval |
+| `RETIRED` | superseded or withdrawn; kept for comparison, never served |
+
+An import can never write `PRODUCTION_ELIGIBLE` — not even for a model the
+research repository classified that way. A status copied across a repository
+boundary is a claim, not a check, so the importer maps such a model down to
+`VALIDATED` and KAIROS re-derives the last rung itself.
+
+### The production-eligibility gate
+
+`analysis/research/production_gate.py` is the only route to
+`PRODUCTION_ELIGIBLE`. It requires all seven, each from evidence on disk:
+
+```
+model_card         loads and validates
+artifact_verified  the bytes hash to what the card declares
+contract_verified  features resolve, are scale-free, fingerprint matches
+research_verdict   research classified this artifact PRODUCTION_ELIGIBLE
+final_oos          a recorded one-shot out-of-sample pass exists
+economics          the economic gate passed AND survived the cost stress
+feature_parity     KAIROS reproduced the research vectors within tolerance
+explicit_approval  a signed record naming a person, a date and the model hash
+```
+
+`promote()` refuses and changes nothing if any check fails, naming which.
+
+**Eligible is not enabled.** Nothing in KAIROS reads this status to switch
+trading on; there is no auto-enable and the gate deliberately provides none.
+A test (`test_eligibility_is_not_activation`) asserts the constant is
+referenced nowhere outside the registry, the gate and the importer.
+
+The approval record is a file rather than a flag because a flag can be
+flipped by anyone and carries no account of why. An approval names who, when,
+and against which artifact hash — change the model by one byte and the
+approval stops applying to it.
+
+```bash
+python scripts/record_research_parity.py     # measures parity, records it
+python -c "from analysis.research import production_gate as g;            print(g.evaluate('models/research/XAUUSD/H1').describe())"
+```
 
 ---
 
 ## 7. `p_win` semantics
 
-```
-p_win = P(TP touched before SL, GIVEN the candidate's direction)
-```
+There are now **two kinds** of research entry model, and they emit different
+probabilities. The kind travels with the artifact (`target_kind` on the card)
+and the loader refuses any card whose declared semantics do not match it.
 
-TP at 2.5×ATR(14) and SL at 1.5×ATR(14), both fixed from the ATR at the entry
-bar, within a bounded horizon (M15 96 bars, H1 72, H4 60).
+| kind | `p_win` | 1R is |
+|---|---|---|
+| `barrier` | `P(TP before SL \| entry_direction)` | the SL distance |
+| `return` | `P(forward move beyond threshold \| entry_direction)` | 1 ATR at entry |
+
+A barrier model's 0.55 and a return model's 0.55 do not mean the same thing,
+and their R-multiples are not comparable. research_v2 shipped barrier models
+only; research_v3 selects the target per dataset and produces both.
+
+For the barrier kind: TP at 2.5×ATR(14) and SL at 1.5×ATR(14), both fixed from
+the ATR at the entry bar, within a bounded horizon (M15 96 bars, H1 72, H4 60).
 
 It is **not** P(price goes up), **not** an expected return, and **not** a
 confidence score. Both sides of a bar are scored independently and their
@@ -250,8 +312,10 @@ directory lacks the column, the source declares spread absent. A stack where
 H1 carried spread and H4 did not would assemble an entry vector whose context
 features came from a different contract than its own.
 
-KAIROS also stores no M15 candles at all, so the three M15 models have no
-real-data replay source here regardless.
+KAIROS also stores no M15 candles at all, so the six M15 models have no
+real-data replay source here. Their golden fixtures use a clearly-labelled
+`SYNTH_` stack, which is why they still prove implementation parity but cannot
+be replayed against real candles.
 
 ---
 
@@ -305,10 +369,26 @@ cannot reach each other — enforced by `tests/test_research_training_paths.py`.
 ## 11. Reproducing everything
 
 ```bash
-python scripts/import_research_model.py --source ../xgbooost   # import 9 models
-python scripts/build_research_fixtures.py                      # rebuild candle fixtures
-python -m pytest tests/ -q                                     # full suite
-python -m pytest tests/test_research_ -q                       # this integration only
+# import both research generations (artifacts are version-scoped and coexist)
+python scripts/import_research_model.py --source ../xgbooost --version research_v2
+python scripts/import_research_model.py --source ../xgbooost --version research_v3
+
+python scripts/build_research_fixtures.py            # rebuild candle fixtures
+python scripts/record_research_parity.py             # measure + record v2 parity
+python scripts/record_research_parity.py --prefix golden_v3   # ...and v3
+
+python -m pytest tests/ -q                           # full suite (1363 tests)
+python -m pytest tests/ -q -k research               # this integration only
+```
+
+Both generations stay separately runnable. With two registered for the same
+symbol/timeframe, a load must name one — the registry refuses to choose,
+because picking by recency or status would be exactly the implicit second
+source of truth this design exists to prevent:
+
+```bash
+python scripts/research_replay.py --symbol GBPUSD --tf H1 --version research_v3 \
+    --source-kind json --source-root tests/fixtures/research/candles --tail 5
 ```
 
 Tests: contract schema/order/formulas, MTF causality and future mutation,

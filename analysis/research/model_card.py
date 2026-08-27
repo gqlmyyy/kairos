@@ -17,16 +17,27 @@ indistinguishable from fabricating it.
 
 Target semantics
 ----------------
-``target`` and ``probability_semantics`` are carried explicitly because the
-number this model emits is easy to misread. It is:
+``target_kind`` and ``probability_semantics`` are carried explicitly because
+the number a model emits is easy to misread, and because research_v3 produces
+TWO different kinds of entry model:
 
-    p_win = P(TP is touched before SL, GIVEN the candidate's direction)
+``barrier``
+    ``p_win = P(TP before SL | entry_direction)`` -- TP and SL at fixed ATR
+    multiples measured at the entry bar, inside a bounded forward horizon.
+    1R is the SL distance.
 
-with TP and SL placed at fixed ATR multiples measured at the entry bar, inside
-a bounded forward horizon. It is **not** P(price goes up), **not** an expected
-return, and **not** a confidence score. A caller that treats it as any of
-those is wrong in a way no amount of calibration fixes, so the semantics
-travel with the artifact.
+``return``
+    ``p_win = P(move beyond the threshold | entry_direction)`` -- a
+    hold-to-horizon trade with NO stop. 1R is defined as 1 ATR at entry.
+
+These are different risk models and different probabilities. A barrier model's
+0.55 and a return model's 0.55 do not mean the same thing and their
+R-multiples are not comparable, so the kind travels with the artifact and the
+loader refuses any card whose declared semantics do not match its kind.
+
+Neither is P(price goes up), an expected return, or a confidence score. A
+caller that treats them as such is wrong in a way no amount of calibration
+fixes.
 """
 
 from __future__ import annotations
@@ -46,16 +57,31 @@ RESEARCH_MANIFEST_FILENAME = "research_manifest.json"
 #: names and order agreeing is not sufficient — this must agree too.
 CURRENT_FEATURE_SCHEMA_VERSION = "research-1.2.0"
 
-#: The probability every research entry model emits.
-PROBABILITY_SEMANTICS = "p_win = P(TP before SL | entry_direction)"
+KIND_BARRIER = "barrier"
+KIND_RETURN = "return"
+
+#: The probability each kind of research entry model emits. A card must
+#: declare the string that matches its kind, exactly.
+PROBABILITY_SEMANTICS_BY_KIND = {
+    KIND_BARRIER: "p_win = P(TP before SL | entry_direction)",
+    KIND_RETURN: "p_win = P(forward move beyond threshold | entry_direction)",
+}
+
+#: Back-compatible default for barrier models (every research_v2 artifact).
+PROBABILITY_SEMANTICS = PROBABILITY_SEMANTICS_BY_KIND[KIND_BARRIER]
 
 REQUIRED_FIELDS: Tuple[str, ...] = (
     "model_id", "symbol", "timeframe", "model_version", "feature_schema_version",
-    "feature_list", "target", "horizon_bars", "tp_atr_multiple", "sl_atr_multiple",
+    "feature_list", "target", "target_kind", "horizon_bars",
     "training_dataset_hash", "feature_manifest_hash", "target_spec_hash", "model_hash",
     "probability_semantics", "research_verdict", "calibration", "context_timeframes",
     "entry_direction_encoding", "source_repo_commit", "environment",
 )
+
+#: Required only for a barrier target. A hold-to-horizon return model has no
+#: stop, so demanding an SL multiple would force a card to declare a barrier
+#: that does not exist.
+REQUIRED_BARRIER_FIELDS: Tuple[str, ...] = ("tp_atr_multiple", "sl_atr_multiple")
 
 
 class ModelCardError(Exception):
@@ -73,9 +99,8 @@ class ModelCard:
     feature_schema_version: str
     feature_list: Tuple[str, ...]
     target: str
+    target_kind: str
     horizon_bars: int
-    tp_atr_multiple: float
-    sl_atr_multiple: float
     training_dataset_hash: str
     feature_manifest_hash: str
     target_spec_hash: str
@@ -87,8 +112,18 @@ class ModelCard:
     entry_direction_encoding: Dict[str, float]
     source_repo_commit: str
     environment: Dict[str, str]
+    tp_atr_multiple: Optional[float] = None
+    sl_atr_multiple: Optional[float] = None
+    return_threshold_atr: Optional[float] = None
     decision_threshold: Optional[float] = None
     extra: Dict[str, Any] = None
+
+    @property
+    def risk_unit(self) -> str:
+        """What 1R means for this model. Never assumed by a caller."""
+        if self.target_kind == KIND_BARRIER:
+            return f"SL distance = {self.sl_atr_multiple} x ATR at entry"
+        return "1 ATR at entry (hold-to-horizon trade, no stop)"
 
     @property
     def feature_count(self) -> int:
@@ -97,7 +132,8 @@ class ModelCard:
     def describe(self) -> str:
         return (f"{self.model_id} ({self.symbol}/{self.timeframe}, "
                 f"schema={self.feature_schema_version}, {self.feature_count} features, "
-                f"verdict={self.research_verdict}, hash={self.model_hash[:12]})")
+                f"target={self.target_kind}, verdict={self.research_verdict}, "
+                f"hash={self.model_hash[:12]})")
 
     def as_dict(self) -> Dict[str, Any]:
         d = asdict(self)
@@ -135,13 +171,30 @@ def parse(raw: Dict[str, Any]) -> ModelCard:
     if not isinstance(horizon, int) or isinstance(horizon, bool) or horizon <= 0:
         raise ModelCardError(f"horizon_bars must be a positive int, got {horizon!r}")
 
-    for key in ("tp_atr_multiple", "sl_atr_multiple"):
-        v = raw[key]
-        if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
-            raise ModelCardError(f"{key} must be a positive number, got {v!r}")
+    kind = raw.get("target_kind")
+    if kind not in (KIND_BARRIER, KIND_RETURN):
+        raise ModelCardError(
+            f"target_kind must be {KIND_BARRIER!r} or {KIND_RETURN!r}, got {kind!r}. "
+            f"The kind decides what p_win means and what 1R is; it cannot be defaulted.")
+
+    if kind == KIND_BARRIER:
+        missing_geom = [k for k in REQUIRED_BARRIER_FIELDS if k not in raw]
+        if missing_geom:
+            raise ModelCardError(
+                f"a barrier model must declare its geometry; missing {missing_geom}")
+        for key in REQUIRED_BARRIER_FIELDS:
+            v = raw[key]
+            if not isinstance(v, (int, float)) or isinstance(v, bool) or v <= 0:
+                raise ModelCardError(f"{key} must be a positive number, got {v!r}")
+    else:
+        thr = raw.get("return_threshold_atr")
+        if not isinstance(thr, (int, float)) or isinstance(thr, bool) or thr < 0:
+            raise ModelCardError(
+                f"a return model must declare return_threshold_atr (>= 0), got {thr!r}")
 
     for key in ("model_id", "symbol", "timeframe", "model_version",
-                "feature_schema_version", "target", "training_dataset_hash",
+                "feature_schema_version", "target", "target_kind",
+                "training_dataset_hash",
                 "feature_manifest_hash", "target_spec_hash", "model_hash",
                 "probability_semantics", "research_verdict", "calibration",
                 "source_repo_commit"):
@@ -149,11 +202,12 @@ def parse(raw: Dict[str, Any]) -> ModelCard:
         if not isinstance(v, str) or not v.strip():
             raise ModelCardError(f"{key} must be a non-empty string, got {v!r}")
 
-    if raw["probability_semantics"] != PROBABILITY_SEMANTICS:
+    expected = PROBABILITY_SEMANTICS_BY_KIND[kind]
+    if raw["probability_semantics"] != expected:
         raise ModelCardError(
-            f"probability_semantics is {raw['probability_semantics']!r}; this KAIROS "
-            f"build only knows how to consume {PROBABILITY_SEMANTICS!r}. A model whose "
-            f"output means something else must not be served through this path.")
+            f"probability_semantics is {raw['probability_semantics']!r}, but a "
+            f"{kind!r} model emits {expected!r}. Same number, different meaning is "
+            f"the drift this field exists to stop.")
 
     threshold = raw.get("decision_threshold")
     if threshold is not None:
@@ -162,14 +216,20 @@ def parse(raw: Dict[str, Any]) -> ModelCard:
         if not 0.0 < float(threshold) < 1.0:
             raise ModelCardError(f"decision_threshold must lie in (0,1), got {threshold!r}")
 
-    known = set(REQUIRED_FIELDS) | {"decision_threshold"}
+    known = (set(REQUIRED_FIELDS) | set(REQUIRED_BARRIER_FIELDS)
+             | {"decision_threshold", "return_threshold_atr"})
     return ModelCard(
         model_id=raw["model_id"], symbol=raw["symbol"], timeframe=raw["timeframe"],
         model_version=raw["model_version"],
         feature_schema_version=raw["feature_schema_version"],
-        feature_list=tuple(features), target=raw["target"], horizon_bars=horizon,
-        tp_atr_multiple=float(raw["tp_atr_multiple"]),
-        sl_atr_multiple=float(raw["sl_atr_multiple"]),
+        feature_list=tuple(features), target=raw["target"], target_kind=kind,
+        horizon_bars=horizon,
+        tp_atr_multiple=(float(raw["tp_atr_multiple"])
+                         if raw.get("tp_atr_multiple") is not None else None),
+        sl_atr_multiple=(float(raw["sl_atr_multiple"])
+                         if raw.get("sl_atr_multiple") is not None else None),
+        return_threshold_atr=(float(raw["return_threshold_atr"])
+                              if raw.get("return_threshold_atr") is not None else None),
         training_dataset_hash=raw["training_dataset_hash"],
         feature_manifest_hash=raw["feature_manifest_hash"],
         target_spec_hash=raw["target_spec_hash"], model_hash=raw["model_hash"],

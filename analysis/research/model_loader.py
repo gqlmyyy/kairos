@@ -119,13 +119,19 @@ def load_model(
     *,
     registry_path=reg.DEFAULT_REGISTRY_PATH,
     statuses: Sequence[str] = tuple(reg.SERVABLE_STATUSES),
+    version: Optional[str] = None,
     verify_hash: bool = True,
 ) -> LoadedModel:
-    """Resolve, validate and load the model for one symbol/timeframe."""
+    """Resolve, validate and load the model for one symbol/timeframe.
+
+    ``version`` selects a research generation when more than one is registered.
+    With several registered and no version given the registry raises rather
+    than choosing — see :meth:`ModelRegistry.resolve`.
+    """
     # 1. registry
     try:
         registry = reg.load_registry(registry_path)
-        entry = registry.resolve(symbol, timeframe, statuses)
+        entry = registry.resolve(symbol, timeframe, statuses, version)
     except reg.RegistryError as exc:
         raise ModelNotCompatible(str(exc), stage="registry") from exc
 
