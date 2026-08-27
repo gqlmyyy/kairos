@@ -665,38 +665,46 @@ def run_cycle():
             macd = float(snapshot_h1.get("macd", 0.0))
 
 
-            if ENTRY_MODEL_VERSION == "v2":
+            # Shared inputs, assembled once so the branches below cannot drift.
+            _entry_inputs = dict(
+                rsi=rsi,
+                atr=atr,
+                macd=macd,
+                # Pass the raw strength through: it is a string, and the
+                # feature spec encodes it. The isinstance guard that used to
+                # be here never passed, so the model always received 0.0.
+                trend_strength=mtf.strength,
+                trend_score=trend_score,
+                momentum_score=momentum[0] if isinstance(momentum, tuple) else momentum,
+                volatility_score=volatility_score,
+                market_regime=regime.get("regime", "UNKNOWN") if isinstance(regime, dict) else str(regime),
+                direction=direction,
+            )
+
+            if ENTRY_MODEL_VERSION == "research":
+                # xgbooost research -> KAIROS research registry -> the
+                # research_v2 model for THIS (symbol, timeframe). live_gate
+                # decides whether it may be served; it blocks unless both of
+                # its conditions hold, and never falls back to
+                # models/entry/entry_model.json.
+                #
+                # TF_DECISION is the entry-decision timeframe the snapshot's
+                # rsi/macd above are read from, so the model asked for is the
+                # one trained on the timeframe actually being traded.
+                from analysis.research import live_gate
+
+                v2_result = live_gate.predict_entry(
+                    symbol=symbol,
+                    timeframe=TF_DECISION,
+                    row=_entry_inputs,
+                    entry_direction=direction,
+                )
+            elif ENTRY_MODEL_VERSION == "v2":
                 from analysis.entry_v2.inference import predict_with_entry_v2
 
-                v2_result = predict_with_entry_v2(
-                    rsi=rsi,
-                    atr=atr,
-                    macd=macd,
-                    # Pass the raw strength through: it is a string, and the
-                    # feature spec encodes it. The isinstance guard that used to
-                    # be here never passed, so the model always received 0.0.
-                    trend_strength=mtf.strength,
-                    trend_score=trend_score,
-                    momentum_score=momentum[0] if isinstance(momentum, tuple) else momentum,
-                    volatility_score=volatility_score,
-                    market_regime=regime.get("regime", "UNKNOWN") if isinstance(regime, dict) else str(regime),
-                    direction=direction,
-                )
+                v2_result = predict_with_entry_v2(**_entry_inputs)
             else:
-                v2_result = predict_with_v2(
-                    rsi=rsi,
-                    atr=atr,
-                    macd=macd,
-                    # Pass the raw strength through: it is a string, and the
-                    # feature spec encodes it. The isinstance guard that used to
-                    # be here never passed, so the model always received 0.0.
-                    trend_strength=mtf.strength,
-                    trend_score=trend_score,
-                    momentum_score=momentum[0] if isinstance(momentum, tuple) else momentum,
-                    volatility_score=volatility_score,
-                    market_regime=regime.get("regime", "UNKNOWN") if isinstance(regime, dict) else str(regime),
-                    direction=direction,
-                )
+                v2_result = predict_with_v2(**_entry_inputs)
 
             xgboost_p_win = v2_result["p_win"]
             model_available = v2_result["available"]
