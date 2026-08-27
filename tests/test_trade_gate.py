@@ -289,3 +289,116 @@ class TestGateOrdering:
             ExplodingGovernor(),
         ):
             assert not validate_trade_request(good_request(), governor).allowed
+
+
+class TestMLModes:
+    """ENTRY_ML_MODE: what happens when the model is UNAVAILABLE.
+
+    `ml_mode` is injected rather than read from the environment, so these
+    pin behaviour without a config round-trip.
+    """
+
+    ABSENT = good_request(
+        ml_available=False, ml_status="ML_MODEL_MISSING", ml_p_win=None,
+        size_multiplier=0.5,
+    )
+
+    def test_required_blocks_when_the_model_is_absent(self):
+        r = validate_trade_request(self.ABSENT, FakeGovernor(), ml_mode="required")
+        assert not r.allowed
+        assert r.reason == "ml_unavailable:ML_MODEL_MISSING"
+
+    def test_required_is_the_behaviour_when_no_mode_is_injected(self):
+        """The default path must be identical to explicit `required` — this is
+        the guarantee that adding the setting changed nothing by itself."""
+        explicit = validate_trade_request(self.ABSENT, FakeGovernor(), ml_mode="required")
+        default = validate_trade_request(self.ABSENT, FakeGovernor())
+        assert default.allowed == explicit.allowed
+        assert default.reason == explicit.reason
+
+    def test_advisory_allows_when_the_model_is_absent(self):
+        r = validate_trade_request(self.ABSENT, FakeGovernor(), ml_mode="advisory")
+        assert r.allowed, r.reason
+        assert any("ml_absent_advisory" in c for c in r.checks)
+
+    def test_off_allows_and_bypasses_the_gate(self):
+        r = validate_trade_request(self.ABSENT, FakeGovernor(), ml_mode="off")
+        assert r.allowed, r.reason
+        assert any("ml_bypassed:off" in c for c in r.checks)
+
+    def test_advisory_still_enforces_the_threshold_when_a_model_IS_serving(self):
+        """advisory softens ML ABSENCE, never what a present model says."""
+        below = good_request(ml_available=True, ml_p_win=0.10, ml_threshold=0.60)
+        r = validate_trade_request(below, FakeGovernor(), ml_mode="advisory")
+        assert not r.allowed
+        assert "ml_below_threshold" in r.reason
+
+    def test_off_ignores_the_threshold_entirely(self):
+        below = good_request(ml_available=True, ml_p_win=0.10, ml_threshold=0.60)
+        r = validate_trade_request(below, FakeGovernor(), ml_mode="off")
+        assert r.allowed, r.reason
+
+    def test_no_mode_bypasses_any_non_ml_protection(self):
+        """The modes relax the ML gate and nothing else. Every other guard
+        must still reject in every mode."""
+        for mode in ("required", "advisory", "off"):
+            for variant in (
+                good_request(signal_is_valid=False),
+                good_request(equity=0.0),
+                good_request(sl_distance=0.0),
+                good_request(position_size=0.0),
+                good_request(size_multiplier=0.0),
+                good_request(risk_passed=False),
+                good_request(final_score=float("nan")),
+            ):
+                assert not validate_trade_request(
+                    variant, FakeGovernor(), ml_mode=mode).allowed, mode
+            for governor in (FakeGovernor(halted=True),
+                              FakeGovernor(can_open=False, open_reason="limit"),
+                              ExplodingGovernor()):
+                assert not validate_trade_request(
+                    good_request(), governor, ml_mode=mode).allowed, mode
+
+    def test_an_unreadable_config_fails_closed_to_required(self, monkeypatch):
+        """A config that cannot be imported must yield the STRICTEST mode.
+        Defaulting to anything else would let an import error be the reason a
+        trade slipped past the filter."""
+        import builtins
+
+        import risk.trade_gate as tg
+
+        real_import = builtins.__import__
+
+        def broken(name, *args, **kwargs):
+            if name == "config":
+                raise ImportError("simulated config failure")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", broken)
+        assert tg.resolve_ml_mode(None) == "required"
+        # and the absent-model multiplier still falls back to something usable
+        assert tg.absent_size_multiplier(None) > 0
+
+    def test_an_injected_mode_wins_over_config(self):
+        import risk.trade_gate as tg
+
+        assert tg.resolve_ml_mode("off") == "off"
+        assert tg.absent_size_multiplier(0.25) == 0.25
+
+
+class TestMLModeConfig:
+    def test_supported_modes_are_exactly_three(self):
+        import config
+        assert config.SUPPORTED_ENTRY_ML_MODES == ("required", "advisory", "off")
+
+    def test_default_is_required(self):
+        import config
+        assert config.ENTRY_ML_MODE == "required", (
+            "the default must stay `required` — relaxing the ML gate is an "
+            "explicit operator choice")
+
+    def test_absent_size_multiplier_is_positive(self):
+        import config
+        assert config.ENTRY_ML_ABSENT_SIZE_MULT > 0, (
+            "a non-positive multiplier is rejected by the size check, which "
+            "would silently recreate the block advisory/off exist to lift")

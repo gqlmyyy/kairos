@@ -37,6 +37,35 @@ class GateDecision(str, Enum):
     REJECT = "REJECT"
 
 
+def resolve_ml_mode(mode: Optional[str] = None) -> str:
+    """The effective ENTRY_ML_MODE. Reads config when not injected.
+
+    Fails closed: an unreadable config yields `required`, the strictest mode.
+    A mode setting that cannot be read must never be the reason a trade slips
+    past the filter.
+    """
+    if mode is not None:
+        return mode
+    try:
+        from config import ENTRY_ML_MODE
+
+        return ENTRY_ML_MODE
+    except Exception:  # noqa: BLE001 - fail closed, never open
+        return "required"
+
+
+def absent_size_multiplier(value: Optional[float] = None) -> float:
+    """Sizing to use when the ML gate is not sizing the trade."""
+    if value is not None:
+        return float(value)
+    try:
+        from config import ENTRY_ML_ABSENT_SIZE_MULT
+
+        return float(ENTRY_ML_ABSENT_SIZE_MULT)
+    except Exception:  # noqa: BLE001
+        return 0.5
+
+
 @dataclass(frozen=True)
 class TradeRequest:
     """Everything the gate needs. Nothing is fetched inside the gate itself,
@@ -91,14 +120,17 @@ def _reject(reason: str, checks: list) -> GateResult:
 def validate_trade_request(
     request: TradeRequest,
     governor: Any = None,
+    ml_mode: Optional[str] = None,
 ) -> GateResult:
     """Decide whether this entry may reach the broker.
 
     Checks run cheapest-first, and every one of them is blocking. ``governor``
     is injected so the gate can be tested without global state; when omitted the
-    process-wide RiskGovernor is used.
+    process-wide RiskGovernor is used. ``ml_mode`` likewise defaults to
+    ``config.ENTRY_ML_MODE`` and exists so tests need no environment.
     """
     checks: list = []
+    mode = resolve_ml_mode(ml_mode)
 
     # --- 1. Signal validity -------------------------------------------------
     if not request.signal_is_valid:
@@ -151,10 +183,25 @@ def validate_trade_request(
     # gate now names the cause.
     #
     # available=False covers ML_GATE_INVALID, model missing and prediction
-    # errors. A trade must never proceed on an unverified probability.
-    if not request.ml_available:
-        return _reject(f"ml_unavailable:{request.ml_status or 'no_status'}", checks)
-    checks.append("ml_available")
+    # errors. In `required` a trade must never proceed on an unverified
+    # probability. In `advisory` the absence is logged and the trade proceeds
+    # on signal + MTF alone; in `off` the gate is bypassed outright.
+    if mode == "off":
+        checks.append("ml_bypassed:off")
+        logger.warning(
+            "[ML_MODE] mode=off — ML gate BYPASSED for %s %s. This trade is not "
+            "filtered by any model.", request.symbol, request.direction)
+    elif not request.ml_available:
+        if mode == "advisory":
+            checks.append(f"ml_absent_advisory:{request.ml_status or 'no_status'}")
+            logger.warning(
+                "[ML_MODE] mode=advisory — model unavailable (%s) for %s %s. "
+                "Trading on signal + MTF WITHOUT ML filtering, at reduced size.",
+                request.ml_status or "no_status", request.symbol, request.direction)
+        else:
+            return _reject(f"ml_unavailable:{request.ml_status or 'no_status'}", checks)
+    else:
+        checks.append("ml_available")
 
     # --- 5. Position size ---------------------------------------------------
     # 0.0 is how calculate_position_size signals "this account cannot take this
@@ -171,15 +218,24 @@ def validate_trade_request(
     checks.append("risk_engine_passed")
 
     # --- 7. ML probability --------------------------------------------------
-    # The rest of the ML gate stays here: these judge the probability's VALUE,
-    # which is only meaningful once sizing and risk have passed.
-    if request.ml_p_win is None or not _finite(request.ml_p_win):
-        return _reject(f"ml_p_win_invalid:{request.ml_p_win}", checks)
-    if request.ml_p_win < request.ml_threshold:
-        return _reject(
-            f"ml_below_threshold:{request.ml_p_win:.3f}<{request.ml_threshold}", checks
-        )
-    checks.append("ml_gate_passed")
+    # The rest of the ML gate: these judge the probability's VALUE, which is
+    # only meaningful once sizing and risk have passed — and only when there
+    # is a probability at all.
+    #
+    # Reached in `required` always (availability above guaranteed a model),
+    # and in `advisory` only when a model IS serving — in which case its
+    # threshold applies in full, exactly as in `required`. `advisory` softens
+    # what happens when the model is ABSENT, never what a present model says.
+    if mode == "off" or (mode == "advisory" and not request.ml_available):
+        checks.append(f"ml_threshold_skipped:{mode}")
+    else:
+        if request.ml_p_win is None or not _finite(request.ml_p_win):
+            return _reject(f"ml_p_win_invalid:{request.ml_p_win}", checks)
+        if request.ml_p_win < request.ml_threshold:
+            return _reject(
+                f"ml_below_threshold:{request.ml_p_win:.3f}<{request.ml_threshold}", checks
+            )
+        checks.append("ml_gate_passed")
 
     # --- 8. Risk Governor ---------------------------------------------------
     # Previously unreachable: this is the halt state AND the MAX_OPEN_TRADES
@@ -205,9 +261,15 @@ def validate_trade_request(
         return _reject(f"risk_governor_error:{exc}", checks)
     checks.append("risk_governor_passed")
 
+    # p_win is legitimately None in advisory/off, so it is formatted rather
+    # than passed to %.3f — which would raise on None and turn an allowed
+    # trade into a crash inside the logging call.
+    p_win_text = (f"{request.ml_p_win:.3f}"
+                  if isinstance(request.ml_p_win, float) and _finite(request.ml_p_win)
+                  else "n/a")
     logger.info(
-        "[TRADE_GATE] ALLOW %s %s size=%s p_win=%.3f checks=%d",
+        "[TRADE_GATE] ALLOW %s %s size=%s p_win=%s ml_mode=%s checks=%d",
         request.symbol, request.direction, request.position_size,
-        request.ml_p_win, len(checks),
+        p_win_text, mode, len(checks),
     )
     return GateResult(GateDecision.ALLOW, "", tuple(checks))
