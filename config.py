@@ -87,13 +87,28 @@ SYMBOLS = ["EURUSD", "XAUUSD", "GBPUSD"]
 # placeholder scalars to a 65-feature artifact, so the contract check blocks
 # every call. Failing loudly at startup is better than a bot that runs all day
 # and silently refuses every signal.
+#
+# 'research' routes the entry gate to analysis/research/live_gate.py: the
+# xgbooost research models, resolved from models/research/registry.json by
+# (symbol, timeframe) and pinned to generation research_v2. It never reads
+# models/entry/entry_model.json.
+#
+# That gate requires two independent conditions — the registry status its own
+# module defines, and a separate activation record — and no shipped model
+# satisfies either today. Selecting 'research' therefore blocks every signal
+# with a reason naming what is missing. That is the intended fail-closed
+# state, not a misconfiguration; see analysis/research/live_gate.py and
+# analysis/research/production_gate.py.
 ENTRY_MODEL_VERSION = _env_str("ENTRY_MODEL_VERSION", "v1")
 
-if ENTRY_MODEL_VERSION != "v1":
+SUPPORTED_ENTRY_MODEL_VERSIONS = ("v1", "research")
+
+if ENTRY_MODEL_VERSION not in SUPPORTED_ENTRY_MODEL_VERSIONS:
     raise ValueError(
         f"ENTRY_MODEL_VERSION={ENTRY_MODEL_VERSION!r} is not supported. "
-        f"Only 'v1' is available; the 'v2' entry path is quarantined pending a "
-        f"rebuilt data pipeline — see ENTRY_PIPELINE_AUDIT.md."
+        f"Available: {', '.join(SUPPORTED_ENTRY_MODEL_VERSIONS)}. The 'v2' entry "
+        f"path is quarantined pending a rebuilt data pipeline — see "
+        f"ENTRY_PIPELINE_AUDIT.md."
     )
 
 

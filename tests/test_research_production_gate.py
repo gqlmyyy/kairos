@@ -182,8 +182,25 @@ def test_promote_refuses_and_changes_nothing_when_evidence_is_incomplete(sandbox
 
 
 def test_eligibility_is_not_activation():
-    """Nothing in KAIROS reads this status to switch trading on."""
-    import ast
+    """Eligibility must never be SUFFICIENT to switch trading on.
+
+    Originally this asserted that nothing outside the registry and its gate
+    referenced the status at all. The live gate
+    (`analysis/research/live_gate.py`) now does reference it, so the check
+    was tightened rather than relaxed: a module may read the status only if
+    it ALSO requires a separate activation record. Eligibility stays
+    necessary-and-not-sufficient, which is the invariant this test exists to
+    protect — the string was only ever a proxy for it.
+    """
+    # Reads the status and is exempt because it does not enable anything.
+    DEFINES_OR_INSPECTS = (
+        "analysis/research/model_registry.py",
+        "analysis/research/production_gate.py",
+        "scripts/import_research_model.py",
+    )
+    # Reads the status AND gates on an independent activation record. The
+    # assertions below prove that second condition really is enforced.
+    REQUIRES_SEPARATE_ACTIVATION = ("analysis/research/live_gate.py",)
 
     offenders = []
     for path in sorted(ROOT.rglob("*.py")):
@@ -195,12 +212,28 @@ def test_eligibility_is_not_activation():
             continue
         if "PRODUCTION_ELIGIBLE" not in text:
             continue
-        allowed = ("analysis/research/model_registry.py",
-                   "analysis/research/production_gate.py",
-                   "scripts/import_research_model.py")
-        if any(path.as_posix().endswith(a) for a in allowed):
+        suffix = path.as_posix()
+        if any(suffix.endswith(a) for a in DEFINES_OR_INSPECTS):
+            continue
+        if any(suffix.endswith(a) for a in REQUIRES_SEPARATE_ACTIVATION):
             continue
         offenders.append(path.relative_to(ROOT).as_posix())
     assert not offenders, (
-        f"PRODUCTION_ELIGIBLE is referenced outside the registry and its gate: "
-        f"{offenders}. Eligibility must never be wired to an enable path.")
+        f"PRODUCTION_ELIGIBLE is referenced outside the registry, its gate, and "
+        f"the activation-gated live path: {offenders}. Eligibility must never be "
+        f"sufficient on its own to enable trading.")
+
+    # The exemption above is only honest if the live gate genuinely enforces a
+    # second, independent condition. Prove it here rather than trusting the
+    # allowlist.
+    from analysis.research import live_gate
+
+    assert hasattr(live_gate, "NotActivated")
+    assert live_gate.REQUIRED_ACTIVATION_FIELDS, "activation must require real fields"
+    assert "model_hash" in live_gate.REQUIRED_ACTIVATION_FIELDS, (
+        "activation must bind to the artifact's hash, or it cannot expire when "
+        "the artifact changes")
+    # No activation file ships, so nothing is activated by default.
+    assert live_gate.load_activations() == {}, (
+        "an activation record is present in the repo — activation is meant to be "
+        "an out-of-band operator act, not a committed default")
