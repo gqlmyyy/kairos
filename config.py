@@ -112,6 +112,56 @@ if ENTRY_MODEL_VERSION not in SUPPORTED_ENTRY_MODEL_VERSIONS:
     )
 
 
+# Entry ML gate mode.
+#
+# Controls what happens when the entry model is UNAVAILABLE. It does not
+# change anything when a model is available and serving: in every mode, a
+# loaded model's p_win still drives sizing and still faces its threshold.
+#
+#   required  (default) — no model, no trade. The current behaviour, exactly.
+#             This is the only mode in which ML absence is a hard block.
+#   advisory  — no model, trade anyway on signal + MTF, sized down to
+#             ENTRY_ML_ABSENT_SIZE_MULT. The ML gate stops being a veto and
+#             becomes what its name says.
+#   off       — the ML gate is bypassed entirely; sizing uses
+#             ENTRY_ML_ABSENT_SIZE_MULT whether or not a model exists.
+#
+# The default stays `required` deliberately. KNOWN_ISSUES.md item 0 and
+# ENTRY_MODEL_INVESTIGATION.md together say the current artifact cannot be
+# served AND that no exploitable edge was found in three years of real
+# candles — walk-forward AUC 0.505-0.523 with fold spreads of 17-21 sigma,
+# and NEGATIVE Brier skill at every feature step, meaning its probabilities
+# are worse than assigning the base rate. Trading without that filter is not
+# obviously worse than trading with it; that is precisely why the choice is
+# yours to make explicitly rather than mine to default.
+ENTRY_ML_MODE = _env_str("ENTRY_ML_MODE", "required")
+
+SUPPORTED_ENTRY_ML_MODES = ("required", "advisory", "off")
+
+if ENTRY_ML_MODE not in SUPPORTED_ENTRY_ML_MODES:
+    raise ValueError(
+        f"ENTRY_ML_MODE={ENTRY_ML_MODE!r} is not supported. "
+        f"Available: {', '.join(SUPPORTED_ENTRY_ML_MODES)}. "
+        f"'required' blocks every trade when the model is unavailable, "
+        f"'advisory' trades without the filter at reduced size, and 'off' "
+        f"bypasses the ML gate entirely — see KNOWN_ISSUES.md item 0."
+    )
+
+# Size multiplier applied when the ML gate is not sizing the trade, i.e. in
+# `advisory` with no model, and always in `off`. Must be > 0: a zero here
+# would be rejected by the trade gate's size check, silently recreating the
+# very block these modes exist to lift.
+ENTRY_ML_ABSENT_SIZE_MULT = _env_float("ENTRY_ML_ABSENT_SIZE_MULT", 0.5)
+
+if not (ENTRY_ML_ABSENT_SIZE_MULT > 0):
+    raise ValueError(
+        f"ENTRY_ML_ABSENT_SIZE_MULT={ENTRY_ML_ABSENT_SIZE_MULT!r} must be "
+        f"greater than 0 — the trade gate rejects a non-positive size "
+        f"multiplier, so this value would block every trade in advisory/off "
+        f"mode instead of sizing it."
+    )
+
+
 # ==============================
 # Timeframes
 # ==============================

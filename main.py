@@ -316,7 +316,7 @@ from config import SYMBOLS, NEWS_CHECK_INTERVAL
 from analysis.features.feature_builder import build_trade_features
 from data.storage.database import upsert_execution_expected
 from analysis.models.xgboost_v2_inference import predict_with_v2, should_trade_v2, get_size_multiplier
-from config import ENTRY_MODEL_VERSION
+from config import ENTRY_MODEL_VERSION, ENTRY_ML_MODE, ENTRY_ML_ABSENT_SIZE_MULT
 
 
 
@@ -730,9 +730,22 @@ def run_cycle():
             if threshold is None:
                 threshold = 0.60
 
-            size_multiplier = (
-                get_size_multiplier(xgboost_p_win) if xgboost_p_win is not None else 0.0
-            )
+            # Sizing follows ENTRY_ML_MODE rather than a hardcoded 0.0.
+            #
+            # The old expression produced 0.0 whenever p_win was None, which
+            # the trade gate's size check then rejected — so ML absence was
+            # enforced here, silently, by arithmetic, rather than by the ML
+            # gate that is supposed to own that decision. Now `required`
+            # still blocks (at the gate, naming the real reason), while
+            # advisory/off size from ENTRY_ML_ABSENT_SIZE_MULT.
+            if ENTRY_ML_MODE == "off" or xgboost_p_win is None:
+                size_multiplier = (
+                    ENTRY_ML_ABSENT_SIZE_MULT
+                    if ENTRY_ML_MODE in ("advisory", "off")
+                    else 0.0
+                )
+            else:
+                size_multiplier = get_size_multiplier(xgboost_p_win)
 
             try:
                 open_position_count = get_total_open_trades()
@@ -770,6 +783,7 @@ def run_cycle():
                 f"vote={direction} risk_passed={risk_passed} sl_tp_calculated={sl_tp_calculated} "
                 f"position_size={position_size} xgboost_p_win={xgboost_p_win} "
                 f"ml_status={v2_result.get('status', '')} "
+                f"ml_mode={ENTRY_ML_MODE} size_multiplier={size_multiplier} "
                 f"final_decision_valid={final_decision_valid} reject_reason={reject_reason or risk_reason} "
                 f"gate_checks={','.join(gate_result.checks)}"
             )
@@ -971,6 +985,36 @@ def main():
         return
 
     logger.info("MT5 session established")
+
+    # Announce the effective ML gate once, at boot, before any cycle runs.
+    # Probing availability here rather than inferring it from the first
+    # rejection means the operator learns the bot's actual filtering posture
+    # from line one of the log instead of from a REJECT reason on cycle 1.
+    try:
+        from analysis.models.xgboost_v2_inference import load_v2_model
+
+        _ml_model_available = load_v2_model() is not None
+    except Exception as exc:  # noqa: BLE001 - diagnostics must never stop boot
+        logger.warning("[ML_MODE] could not probe model availability: %s", exc)
+        _ml_model_available = False
+
+    logger.info("[ML_MODE] mode=%s model_available=%s",
+                ENTRY_ML_MODE, _ml_model_available)
+    if ENTRY_ML_MODE == "off":
+        logger.warning(
+            "[ML_MODE] ENTRY_ML_MODE=off — the ML entry gate is BYPASSED. Trades "
+            "are filtered by signal + MTF only, with NO model filtering, sized at "
+            "%s.", ENTRY_ML_ABSENT_SIZE_MULT)
+    elif ENTRY_ML_MODE == "advisory" and not _ml_model_available:
+        logger.warning(
+            "[ML_MODE] ENTRY_ML_MODE=advisory and no model is available — trading "
+            "will proceed on signal + MTF with NO ML filtering, sized at %s. See "
+            "KNOWN_ISSUES.md item 0.", ENTRY_ML_ABSENT_SIZE_MULT)
+    elif not _ml_model_available:
+        logger.error(
+            "[ML_MODE] ENTRY_ML_MODE=required and no model is available — EVERY "
+            "trade will be rejected with ml_unavailable. Run "
+            "scripts/diagnose_entry_gate.py to see why.")
 
     # Startup safety check (run once) BEFORE any thread and BEFORE Cycle 1
     ok = startup_safety_check(mt5)
