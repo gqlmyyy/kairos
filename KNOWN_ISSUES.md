@@ -17,16 +17,57 @@ It is offline validation only; nothing is wired to live trading.
 
 ## 0. THE ENTRY MODEL STILL GATES SHUT — the bot cannot open a trade
 
-**Severity: blocks all trading. Read this before anything else in this file.**
+**Severity: blocks all trading in the default mode. Read this before anything
+else in this file.**
+
+**Diagnose it in one command — no MT5, no Windows, no broker needed:**
+
+```
+python scripts/diagnose_entry_gate.py
+```
+
+It prints the artifact, the sidecar, both feature counts, the effective
+config, and one verdict line saying exactly why nothing will trade and what
+to do next.
 
 `models/entry/entry_model.json` expects **65** features; the live path sends
-**10**. `risk/trade_gate.py` treats `ml_available=False` as an unconditional
-REJECT, so every signal, on every symbol, every cycle, is refused:
+**10**. It also has no metadata sidecar
+(`models/entry/entry_model.json.metadata.json`), so `entry_model_metadata`
+refuses to serve it — that refusal fires first and is the proximate cause.
+In the default `ENTRY_ML_MODE=required`, `risk/trade_gate.py` treats
+`ml_available=False` as an unconditional REJECT, so every signal, on every
+symbol, every cycle, is refused:
 
 ```
 [ML_GATE] ML_GATE_INVALID — feature count mismatch: model expects 65, got 10
-[TRADE_GATE] REJECT — ...
+[TRADE_GATE] REJECT — ml_unavailable:ML_MODEL_MISSING
 ```
+
+**Two things changed about how this presents (the block itself is unchanged):**
+
+1. **The rejection now names the cause, not a symptom.** `size_multiplier`
+   is derived from `p_win`, so an absent model yields `0.0` and the gate's
+   size check — which used to run first — reported
+   `size_multiplier_not_positive:0.0`. That points at position sizing and
+   sends a reader to the risk engine for a problem that lives in the model
+   artifact. The ML-availability check now runs before the value it
+   produces is judged.
+
+2. **`ENTRY_ML_MODE` makes the block a choice.** Default `required` is the
+   existing behaviour, byte for byte. `advisory` trades on signal + MTF at
+   `ENTRY_ML_ABSENT_SIZE_MULT` (0.5) when no model is available, while
+   still enforcing the threshold whenever a model *is* serving. `off`
+   bypasses the ML gate entirely. Both log an explicit warning that trading
+   is proceeding unfiltered.
+
+   Before switching, read `ENTRY_MODEL_INVESTIGATION.md`: three years of
+   real candles across nine labelling configurations and six feature groups
+   found **no exploitable edge** — walk-forward AUC 0.505–0.523, fold
+   spreads of 17–21σ, and negative Brier skill at every step (the
+   probabilities are worse than assigning the base rate). The filter being
+   switched off was never demonstrated to help. That is an argument for
+   making the choice consciously, not an argument that either setting is
+   safe by default.
 
 This is the C-01 contract check working as designed — before it existed, the
 same mismatch was *unchecked* and `booster.predict()` silently zero-filled the
