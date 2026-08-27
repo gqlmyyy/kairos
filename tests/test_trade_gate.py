@@ -169,6 +169,49 @@ class TestMLGate:
         r = validate_trade_request(good_request(ml_p_win=None), FakeGovernor())
         assert "ml_p_win_invalid" in r.reason
 
+    def test_missing_model_is_not_masked_as_a_sizing_failure(self):
+        """The live symptom, reproduced exactly.
+
+        With no metadata sidecar, xgboost_v2_inference refuses to load the
+        model, so p_win is None and main.py derives size_multiplier = 0.0.
+        Both conditions therefore arrive at the gate together. The reported
+        reason must be the CAUSE (no model) and not the SYMPTOM (zero
+        multiplier) — reporting the latter sends a reader to the risk engine
+        for a problem that lives in the model artifact.
+        """
+        r = validate_trade_request(
+            good_request(
+                ml_available=False,
+                ml_status="ML_MODEL_MISSING",
+                ml_p_win=None,
+                size_multiplier=0.0,
+            ),
+            FakeGovernor(),
+        )
+        assert not r.allowed
+        assert r.reason == "ml_unavailable:ML_MODEL_MISSING"
+        assert "size_multiplier" not in r.reason
+
+    def test_a_genuine_sizing_failure_still_reports_sizing(self):
+        """The hoist must not swallow real sizing rejections: with ML
+        available, a zero multiplier is still a sizing problem."""
+        r = validate_trade_request(
+            good_request(ml_available=True, ml_p_win=0.72, size_multiplier=0.0),
+            FakeGovernor(),
+        )
+        assert not r.allowed
+        assert "size_multiplier_not_positive" in r.reason
+
+    def test_ml_availability_is_checked_before_sizing(self):
+        """Ordering pinned directly, so a future reshuffle that reintroduces
+        the masking fails here rather than in production logs."""
+        r = validate_trade_request(
+            good_request(ml_available=False, ml_status="ML_MODEL_MISSING"),
+            FakeGovernor(),
+        )
+        assert "size_valid" not in r.checks, (
+            "the size check ran before ML availability — the masking bug is back")
+
     @pytest.mark.parametrize("bad", [float("nan"), float("inf")])
     def test_non_finite_p_win_rejected(self, bad):
         r = validate_trade_request(good_request(ml_p_win=bad), FakeGovernor())

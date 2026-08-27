@@ -136,7 +136,27 @@ def validate_trade_request(
         return _reject(f"tp_distance_negative:{request.tp_distance}", checks)
     checks.append("sl_tp_valid")
 
-    # --- 4. Position size ---------------------------------------------------
+    # --- 4. ML availability -------------------------------------------------
+    # Checked BEFORE the size check, and that ordering is the whole point.
+    #
+    # `size_multiplier` is DERIVED from `ml_p_win` — main.py computes it via
+    # get_size_multiplier(p_win), which yields 0.0 when there is no
+    # probability to size from. So an absent model produces a zero multiplier
+    # as a downstream *symptom*. With the size check first, every rejection
+    # caused by a missing model was reported as
+    # `size_multiplier_not_positive:0.0`, which points at position sizing and
+    # sends the reader to the risk engine — while the real cause is that
+    # models/entry/entry_model.json has no metadata sidecar and was never
+    # loaded. Reporting a symptom as the cause cost real debugging time; the
+    # gate now names the cause.
+    #
+    # available=False covers ML_GATE_INVALID, model missing and prediction
+    # errors. A trade must never proceed on an unverified probability.
+    if not request.ml_available:
+        return _reject(f"ml_unavailable:{request.ml_status or 'no_status'}", checks)
+    checks.append("ml_available")
+
+    # --- 5. Position size ---------------------------------------------------
     # 0.0 is how calculate_position_size signals "this account cannot take this
     # trade at this stop" — it is a rejection, not a clamp.
     if request.position_size <= 0:
@@ -145,16 +165,14 @@ def validate_trade_request(
         return _reject(f"size_multiplier_not_positive:{request.size_multiplier}", checks)
     checks.append("size_valid")
 
-    # --- 5. Risk engine -----------------------------------------------------
+    # --- 6. Risk engine -----------------------------------------------------
     if not request.risk_passed:
         return _reject(f"risk_engine:{request.risk_reason or 'blocked'}", checks)
     checks.append("risk_engine_passed")
 
-    # --- 6. ML gate ---------------------------------------------------------
-    # available=False covers ML_GATE_INVALID, model missing and prediction
-    # errors. A trade must never proceed on an unverified probability.
-    if not request.ml_available:
-        return _reject(f"ml_unavailable:{request.ml_status or 'no_status'}", checks)
+    # --- 7. ML probability --------------------------------------------------
+    # The rest of the ML gate stays here: these judge the probability's VALUE,
+    # which is only meaningful once sizing and risk have passed.
     if request.ml_p_win is None or not _finite(request.ml_p_win):
         return _reject(f"ml_p_win_invalid:{request.ml_p_win}", checks)
     if request.ml_p_win < request.ml_threshold:
@@ -163,7 +181,7 @@ def validate_trade_request(
         )
     checks.append("ml_gate_passed")
 
-    # --- 7. Risk Governor ---------------------------------------------------
+    # --- 8. Risk Governor ---------------------------------------------------
     # Previously unreachable: this is the halt state AND the MAX_OPEN_TRADES
     # ceiling the governor owns.
     gov = governor
