@@ -1,0 +1,185 @@
+{
+  "economics": {
+    "n_trades": 39,
+    "net_expectancy_r": -0.3603906958055364,
+    "passed": false,
+    "robustness": "FRAGILE",
+    "survives_cost_stress": false
+  },
+  "final_classification": "NO_SIGNAL",
+  "final_oos": {
+    "G8_passed": null,
+    "beats_prior_log_loss": null,
+    "log_loss": null,
+    "n_test": null,
+    "n_trades": null,
+    "net_expectancy_r": null,
+    "roc_auc": null
+  },
+  "gates": [
+    {
+      "detail": "hashes match, build_mode=REAL, label reproduces at 1.0",
+      "evidence": {
+        "baseline_agreement": 1.0,
+        "integrity": {
+          "build_mode": "REAL",
+          "test": {
+            "actual": "8f690f9a29208ccef47e99b1f2aa15b47d97642201dea1a5d913dcbd7b3e5932",
+            "match": true,
+            "recorded": "8f690f9a29208ccef47e99b1f2aa15b47d97642201dea1a5d913dcbd7b3e5932"
+          },
+          "train": {
+            "actual": "579a8ee4a0d452e267c8fa6157c74944f47e518aea495e9dcc4120dde4d48414",
+            "match": true,
+            "recorded": "579a8ee4a0d452e267c8fa6157c74944f47e518aea495e9dcc4120dde4d48414"
+          },
+          "validation": {
+            "actual": "354b3280a78485587b11b7d7beba68eaf7d3159477b9dec199e87de4e019fa14",
+            "match": true,
+            "recorded": "354b3280a78485587b11b7d7beba68eaf7d3159477b9dec199e87de4e019fa14"
+          }
+        }
+      },
+      "gate": "G1_data_validity",
+      "passed": true
+    },
+    {
+      "detail": "all 5 leakage checks passed",
+      "evidence": {
+        "checks": [
+          "single_feature_auc",
+          "feature_target_correlation",
+          "train_label_path_vs_validation_start",
+          "meta_columns_not_features",
+          "outcome_columns_not_features"
+        ],
+        "clean": true,
+        "detail": "all 5 leakage checks passed",
+        "source": "data/reports/research_rebuild/leakage.json"
+      },
+      "gate": "G2_leakage",
+      "passed": true
+    },
+    {
+      "detail": "428.7 effective labels vs required 300.0",
+      "evidence": {
+        "effective_labels": 428.7,
+        "selected_from_eligible_only": true
+      },
+      "gate": "G3_effective_sample",
+      "passed": true
+    },
+    {
+      "detail": "dev AUC 0.5186+/-0.0207, 4/5 folds above 0.5, train-dev gap 0.057",
+      "evidence": {
+        "dev_auc_mean": 0.5185531760806972,
+        "dev_auc_std": 0.02072951176982662,
+        "folds_above_half": 4,
+        "gap": 0.05713424834683343,
+        "n_folds": 5
+      },
+      "gate": "G4_temporal_robustness",
+      "passed": false
+    },
+    {
+      "detail": "validation-block block-permutation p=0.4015984015984016",
+      "evidence": {
+        "n_permutations": 1000,
+        "null_mean": 0.5000270965853013,
+        "null_std": 0.022434708194261254,
+        "observed": 0.5051756461293628,
+        "p_value": 0.4015984015984016
+      },
+      "gate": "G5a_null_raw_p",
+      "passed": false
+    },
+    {
+      "detail": "Benjamini-Hochberg q=0.6023976023976024 at alpha=0.1",
+      "evidence": {
+        "n_hypotheses": 13,
+        "q_value": 0.6023976023976024,
+        "selection_adjusted_p": 1.0
+      },
+      "gate": "G5b_null_fdr",
+      "passed": false
+    },
+    {
+      "detail": "method=isotonic, beats prior brier=True, log-loss=True, ECE=0.0",
+      "evidence": {
+        "beats_prior_brier": true,
+        "beats_prior_log_loss": true,
+        "ece": 0.0,
+        "method": "isotonic"
+      },
+      "gate": "G6_calibration",
+      "passed": true
+    },
+    {
+      "detail": "validation net expectancy -0.3603906958055364 R over 39 trades; cost stress FRAGILE",
+      "evidence": {
+        "n_trades": 39,
+        "net_expectancy_r": -0.3603906958055364,
+        "robustness": "FRAGILE",
+        "stressed_net_expectancy_r": -0.37215959555425293
+      },
+      "gate": "G7_economics",
+      "passed": false
+    }
+  ],
+  "hypothesis_ledger": {
+    "stage1_targets": 5,
+    "stage2_configs": 8
+  },
+  "kairos_parity": {
+    "fixture_ohlc": "REAL",
+    "golden_fixture": "golden_v3_EURUSD_H1.json",
+    "max_feature_delta": 0.0,
+    "max_probability_delta": 0.0,
+    "model_hash": "3e68820d7724b8a6cd598f361cdd75aba4f4c8d993fe1908dcb94d66709473b8",
+    "model_id": "research_v3__EURUSD__H1",
+    "n_expected": 32,
+    "n_samples": 32,
+    "note": "Maximum absolute delta over every golden sample. The fixture's spread column is synthetic and some stacks are synthetic OHLC: this measures implementation agreement, not model quality.",
+    "passed": true,
+    "statuses": [
+      "OK"
+    ],
+    "tolerance": 1e-12,
+    "worst_feature": null
+  },
+  "null_test": {
+    "evaluated_on": "validation block (never used for selection)",
+    "fdr": {
+      "n_tests": 9,
+      "p_value": 0.4015984015984016,
+      "q_value": 0.6023976023976024,
+      "rank": 6,
+      "significant_after_fdr": false
+    },
+    "feature_set": "scale_free_dedup_nodir",
+    "horizon_bars": 18,
+    "model": "logit_en",
+    "n_hypotheses_for_this_dataset": 13,
+    "n_validation": 962,
+    "null": {
+      "n_permutations": 1000,
+      "null_mean": 0.5000270965853013,
+      "null_std": 0.022434708194261254,
+      "observed": 0.5051756461293628,
+      "p_value": 0.4015984015984016,
+      "percentile": 59.9,
+      "scheme": "circular_block",
+      "verdict": "NO_EVIDENCE"
+    },
+    "observed_validation_auc": 0.5051756461293628,
+    "p_value_floor": 0.001,
+    "seconds": 50.1,
+    "selection_adjusted_p": 1.0,
+    "selection_adjusted_p_note": "reported for transparency only; the gate does not use it, because selection happened on development and this test reads validation",
+    "target": "h_quarter_18"
+  },
+  "pre_oos_classification": "NO_SIGNAL",
+  "source": "xgbooost research_v3",
+  "symbol": "EURUSD",
+  "timeframe": "H1"
+}

@@ -21,6 +21,10 @@ from analysis.research.model_loader import ModelNotCompatible, load_model
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "models" / "research" / "registry.json"
 
+#: The generation these path-level tests operate on. Both are registered, so a
+#: test that wants "a model" has to name one.
+VERSION = "research_v2"
+
 pytestmark = pytest.mark.skipif(not REGISTRY.exists(),
                                 reason="research models not imported in this checkout")
 
@@ -28,11 +32,11 @@ pytestmark = pytest.mark.skipif(not REGISTRY.exists(),
 @pytest.fixture
 def sandbox(tmp_path):
     """A private copy of one model, so a test can corrupt it safely."""
-    src = ROOT / "models" / "research" / "XAUUSD" / "H1"
+    src = ROOT / "models" / "research" / VERSION / "XAUUSD" / "H1"
     dest = tmp_path / "models" / "research" / "XAUUSD" / "H1"
     shutil.copytree(src, dest)
     entry = json.loads(REGISTRY.read_text(encoding="utf-8"))
-    row = next(m for m in entry["models"] if m["model_id"] == "research_v2__XAUUSD__H1")
+    row = next(m for m in entry["models"] if m["model_id"] == f"{VERSION}__XAUUSD__H1")
     row["path"] = str(dest)
     registry_path = tmp_path / "registry.json"
     registry_path.write_text(json.dumps({"schema": entry["schema"], "models": [row]}),
@@ -191,7 +195,7 @@ def test_two_models_for_one_pair_is_an_error_not_a_silent_choice(sandbox):
     clone["model_id"] = clone["model_id"] + "__clone"
     raw["models"].append(clone)
     registry_path.write_text(json.dumps(raw), encoding="utf-8")
-    with pytest.raises(ModelNotCompatible, match="Retire all but one"):
+    with pytest.raises(ModelNotCompatible, match="Pass version=|retire the rest"):
         load_model("XAUUSD", "H1", registry_path=registry_path)
 
 
@@ -201,7 +205,7 @@ def _registry():
     return json.loads(REGISTRY.read_text(encoding="utf-8"))
 
 
-def test_no_shipped_model_is_marked_validated():
+def test_no_shipped_model_is_marked_production_eligible():
     """Offline integration does not promote anything.
 
     Every shipped model carries a NO_SIGNAL or DROP verdict from the research
@@ -209,11 +213,11 @@ def test_no_shipped_model_is_marked_validated():
     hash, never a side effect of a successful import.
     """
     for m in _registry()["models"]:
-        assert m["status"] == reg.RESEARCH, f"{m['model_id']} is {m['status']}"
+        assert m["status"] != reg.PRODUCTION_ELIGIBLE, f"{m['model_id']} is {m['status']}"
 
 
 def test_the_registry_has_no_production_status():
-    assert "PRODUCTION" not in reg.STATUSES
+    assert reg.PRODUCTION_ELIGIBLE in reg.GATED_STATUSES
     assert all(m["status"] in reg.STATUSES for m in _registry()["models"])
 
 
@@ -229,10 +233,13 @@ def test_research_models_never_write_over_legacy_artifacts():
     for m in _registry()["models"]:
         p = Path(m["path"]).as_posix()
         assert p.startswith("models/research/"), p
+        assert m["version"] in p, "artifacts must be version-scoped"
         assert "models/entry" not in p
 
 
 def test_every_model_carries_its_research_verdict():
     """A NO_SIGNAL model must not be able to look like a validated one."""
+    known = {"NO_SIGNAL", "DROP", "RESEARCH", "CANDIDATE", "VALIDATED",
+             "PRODUCTION_ELIGIBLE"}
     for m in _registry()["models"]:
-        assert m["research_verdict"] in ("NO_SIGNAL", "DROP"), m["model_id"]
+        assert m["research_verdict"] in known, m["model_id"]

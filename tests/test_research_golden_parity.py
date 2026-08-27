@@ -44,6 +44,13 @@ pytestmark = pytest.mark.skipif(
     reason="research models/golden fixtures not present in this checkout")
 
 
+#: Which research generation a golden fixture belongs to, from its filename.
+#: Both generations are registered for the same symbol/timeframe, so every
+#: load has to say which one it means -- the registry refuses to guess.
+def _version_of(path: Path) -> str:
+    return "research_v3" if path.name.startswith("golden_v3_") else "research_v2"
+
+
 def _golden_files():
     return sorted(GOLDEN.glob("golden_*.json")) if GOLDEN.exists() else []
 
@@ -56,6 +63,10 @@ def _load(path: Path) -> dict:
 def source():
     from analysis.research import candles as cd
     return cd.JsonCandleSource(CANDLES)
+
+
+def _load(path: Path) -> dict:  # noqa: F811 - re-declared for clarity below
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _recompute(golden: dict, source) -> pd.DataFrame:
@@ -95,7 +106,8 @@ def test_p_win_matches_the_research_model(path, source):
     from analysis.research.model_loader import load_model
 
     golden = _load(path)
-    model = load_model(golden["symbol"], golden["entry_timeframe"])
+    model = load_model(golden["symbol"], golden["entry_timeframe"],
+                       version=_version_of(path))
     frame = _recompute(golden, source)
 
     checked = 0
@@ -117,7 +129,8 @@ def test_feature_order_matches_the_shipped_model(path):
     from analysis.research.model_loader import load_model
 
     golden = _load(path)
-    model = load_model(golden["symbol"], golden["entry_timeframe"])
+    model = load_model(golden["symbol"], golden["entry_timeframe"],
+                       version=_version_of(path))
     assert list(model.feature_names) == golden["feature_order"]
 
 
@@ -154,13 +167,33 @@ def test_golden_fixtures_carry_their_provenance_and_verdict():
         g = _load(path)
         assert g["fixture_ohlc"] in ("REAL", "SYNTHETIC")
         assert "not_a_market_claim" in g
-        assert g["model_verdict"] in ("NO_SIGNAL", "DROP", "PASS", "REJECTED")
+        assert g["model_verdict"] in ("NO_SIGNAL", "DROP", "RESEARCH", "CANDIDATE",
+                                      "VALIDATED", "PRODUCTION_ELIGIBLE")
 
 
 def test_every_shipped_model_has_a_golden_fixture():
+    """Both generations, every symbol/timeframe."""
     registry = json.loads(REGISTRY.read_text(encoding="utf-8"))
-    covered = {(g["symbol"], g["entry_timeframe"])
-               for g in (_load(p) for p in _golden_files())}
+    covered = {(_load(p)["symbol"], _load(p)["entry_timeframe"], _version_of(p))
+               for p in _golden_files()}
     for m in registry["models"]:
-        assert (m["symbol"], m["timeframe"]) in covered, (
+        assert (m["symbol"], m["timeframe"], m["version"]) in covered, (
             f"{m['model_id']} has no golden parity fixture")
+
+
+def test_the_two_generations_are_separately_loadable():
+    """Preserving old artifacts is only real if they still run."""
+    from analysis.research.model_loader import load_model
+    from analysis.research.model_registry import load_registry
+
+    registry = load_registry(REGISTRY)
+    versions = registry.versions("GBPUSD", "M15")
+    assert set(versions) >= {"research_v2", "research_v3"}, versions
+    for v in versions:
+        model = load_model("GBPUSD", "M15", version=v)
+        assert model.card.model_version == v
+
+    # ...and with both registered, an unqualified load must refuse rather than
+    # pick one, because picking would be an implicit second source of truth.
+    with pytest.raises(Exception, match="Pass version="):
+        load_model("GBPUSD", "M15")

@@ -30,6 +30,9 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--symbol", required=True)
     ap.add_argument("--tf", required=True, help="entry timeframe, e.g. H1")
+    ap.add_argument("--version", default=None,
+                    help="research generation, e.g. research_v2 or research_v3; "
+                         "required when both are registered for this pair")
     ap.add_argument("--source-kind", default="kairos", choices=("kairos", "csv", "json"))
     ap.add_argument("--source-root", default="data/historical")
     ap.add_argument("--start"), ap.add_argument("--end")
@@ -51,8 +54,8 @@ def main() -> int:
         limit, tail = args.limit, args.tail
         if limit is None and tail is None:
             tail = 200
-        result = rp.replay(args.symbol, args.tf, source, start=args.start,
-                           end=args.end, limit=limit, tail=tail)
+        result = rp.replay(args.symbol, args.tf, source, version=args.version,
+                           start=args.start, end=args.end, limit=limit, tail=tail)
     except (ModelNotCompatible, cd.CandleSourceError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2

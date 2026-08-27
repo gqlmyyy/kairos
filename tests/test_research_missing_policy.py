@@ -22,6 +22,11 @@ from analysis.research import availability as av
 
 ROOT = Path(__file__).resolve().parent.parent
 REGISTRY = ROOT / "models" / "research" / "registry.json"
+
+#: Both research generations are registered for every symbol/timeframe, so a
+#: load has to name one. These suites exercise the mechanics, not a particular
+#: model, and pin v2 so the assertions stay stable as new generations land.
+VERSION = "research_v2"
 CANDLES = ROOT / "tests" / "fixtures" / "research" / "candles"
 
 
@@ -110,7 +115,7 @@ def test_a_source_without_spread_refuses_to_predict_rather_than_inventing_it():
         pytest.skip("no stored historical candles in this checkout")
 
     result = rp.replay("XAUUSD", "H1", source, start="2024-06-01", limit=3,
-                       registry_path=REGISTRY)
+                       registry_path=REGISTRY, version=VERSION)
     assert result.rows_scored == 0
     assert set(result.status_counts) == {"FEATURE_UNAVAILABLE"}
     assert "spread" in result.unavailable_columns
@@ -126,7 +131,7 @@ def test_an_unavailable_feature_blocks_even_when_every_other_feature_is_fine():
     from analysis.research import inference as inf
     from analysis.research.model_loader import load_model
 
-    model = load_model("XAUUSD", "H1", registry_path=REGISTRY)
+    model = load_model("XAUUSD", "H1", registry_path=REGISTRY, version=VERSION)
     source = cd.JsonCandleSource(CANDLES)
     stack = cd.load_stack(source, "XAUUSD", ["H1", "H4"])
     frame = E.build_feature_frame("XAUUSD", "H1", stack, ["H4"])
@@ -149,7 +154,7 @@ def test_a_single_nan_feature_blocks_the_prediction():
     from analysis.research import inference as inf
     from analysis.research.model_loader import load_model
 
-    model = load_model("XAUUSD", "H1", registry_path=REGISTRY)
+    model = load_model("XAUUSD", "H1", registry_path=REGISTRY, version=VERSION)
     source = cd.JsonCandleSource(CANDLES)
     frame = E.build_feature_frame("XAUUSD", "H1",
                                   cd.load_stack(source, "XAUUSD", ["H1", "H4"]), ["H4"])
@@ -169,7 +174,7 @@ def test_a_zero_feature_does_not_block_the_prediction():
     from analysis.research import inference as inf
     from analysis.research.model_loader import load_model
 
-    model = load_model("XAUUSD", "H1", registry_path=REGISTRY)
+    model = load_model("XAUUSD", "H1", registry_path=REGISTRY, version=VERSION)
     source = cd.JsonCandleSource(CANDLES)
     frame = E.build_feature_frame("XAUUSD", "H1",
                                   cd.load_stack(source, "XAUUSD", ["H1", "H4"]), ["H4"])
@@ -190,7 +195,7 @@ def test_a_missing_entry_direction_is_refused_not_defaulted_to_buy():
     from analysis.research import inference as inf
     from analysis.research.model_loader import load_model
 
-    model = load_model("XAUUSD", "H1", registry_path=REGISTRY)
+    model = load_model("XAUUSD", "H1", registry_path=REGISTRY, version=VERSION)
     if "entry_direction" not in model.feature_names:
         pytest.skip("this model's feature set carries no entry_direction")
 
