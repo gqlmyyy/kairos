@@ -1,0 +1,46 @@
+{
+  "symbol": "GBPUSD",
+  "timeframe": "H4",
+  "source": "mt5",
+  "downloaded_at": "2026-09-05T06:55:38.570623+00:00",
+  "data_start": "2021-09-06T00:00:00+00:00",
+  "data_end": "2026-09-04T20:00:00+00:00",
+  "row_count": 7789,
+  "schema_version": "kairos-candles-v2",
+  "timezone": "UTC",
+  "gap_summary": {
+    "gap_count": 267,
+    "by_category": {
+      "WEEKEND": 259,
+      "MARKET_CLOSED": 6,
+      "EXPECTED": 0,
+      "DATA_GAP": 0,
+      "UNKNOWN": 2
+    },
+    "largest_gap": {
+      "category": "MARKET_CLOSED",
+      "engine_category": "EXPECTED_MARKET_GAP",
+      "reason": "known_holiday",
+      "missing_bars": 18,
+      "duration_hours": 72.0,
+      "gap_start_utc": "2023-12-30T00:00:00+00:00",
+      "gap_end_utc": "2024-01-02T00:00:00+00:00",
+      "start_weekday": 5,
+      "stop_weekday": 4,
+      "start_hour_utc": 0,
+      "stop_hour_utc": 20,
+      "rule_checks": {
+        "weekly_close": "last trade Fri 20:xx UTC (Friday, late enough), resumes Tue (not weekend/Monday)",
+        "known_holiday": "overlaps an evidenced US market holiday",
+        "broker_maintenance": "00:00 UTC typical size 12 bars (MAD 0.0), tolerance [11.0, 13.0]; this gap is 18 bars (outside tolerance)"
+      }
+    }
+  },
+  "coverage": {
+    "coverage_status": "COMPLETE",
+    "years_covered": 5.0,
+    "target_years": 5.0
+  },
+  "validation_status": "PASS",
+  "path": "data\\historical\\GBPUSD_H4.json"
+}

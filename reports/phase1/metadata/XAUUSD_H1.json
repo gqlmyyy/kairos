@@ -1,0 +1,46 @@
+{
+  "symbol": "XAUUSD",
+  "timeframe": "H1",
+  "source": "mt5",
+  "downloaded_at": "2026-09-05T06:55:40.189466+00:00",
+  "data_start": "2021-09-06T01:00:00+00:00",
+  "data_end": "2026-09-04T22:00:00+00:00",
+  "row_count": 29461,
+  "schema_version": "kairos-candles-v2",
+  "timezone": "UTC",
+  "gap_summary": {
+    "gap_count": 1295,
+    "by_category": {
+      "WEEKEND": 250,
+      "MARKET_CLOSED": 1040,
+      "EXPECTED": 0,
+      "DATA_GAP": 2,
+      "UNKNOWN": 3
+    },
+    "largest_gap": {
+      "category": "MARKET_CLOSED",
+      "engine_category": "EXPECTED_MARKET_GAP",
+      "reason": "known_holiday",
+      "missing_bars": 74,
+      "duration_hours": 74.0,
+      "gap_start_utc": "2024-03-28T23:00:00+00:00",
+      "gap_end_utc": "2024-04-01T01:00:00+00:00",
+      "start_weekday": 3,
+      "stop_weekday": 3,
+      "start_hour_utc": 23,
+      "stop_hour_utc": 22,
+      "rule_checks": {
+        "weekly_close": "last trade Thu 22:xx UTC (not Friday), resumes Mon (weekend/Monday)",
+        "known_holiday": "overlaps an evidenced US market holiday",
+        "broker_maintenance": "23:00 UTC typical size 2 bars (MAD 0.0), tolerance [1.0, 3.0]; this gap is 74 bars (outside tolerance)"
+      }
+    }
+  },
+  "coverage": {
+    "coverage_status": "COMPLETE",
+    "years_covered": 5.0,
+    "target_years": 5.0
+  },
+  "validation_status": "FAIL",
+  "path": "data\\historical\\XAUUSD_H1.json"
+}

@@ -100,15 +100,36 @@ def test_a_narrower_window_does_not_change_the_values_inside_it(source):
                                    check_names=False)
 
 
-def test_replay_reports_what_it_refused(source):
+def test_replay_reports_what_it_refused(tmp_path):
     from analysis.research import candles as cd
     from analysis.research import replay as rp
 
-    bare = cd.KairosHistoricalSource(ROOT / "data" / "historical")
-    if not bare.available("XAUUSD", "H1"):
-        pytest.skip("no stored historical candles in this checkout")
+    # Phase 1 note: this used to ride on the real data/historical snapshot
+    # being pre-spread; Phase 1 re-fetched every file WITH spread, so the
+    # no-spread condition is now built explicitly from the golden fixture
+    # (spread dropped) instead of depending on the snapshot's state.
+    import json
+    from datetime import datetime
 
-    result = rp.replay("XAUUSD", "H1", bare, start="2024-06-01", limit=5,
+    golden_h1 = json.load(open(CANDLES / "XAUUSD_H1.json", encoding="utf-8"))
+    golden_h4 = json.load(open(CANDLES / "XAUUSD_H4.json", encoding="utf-8"))
+    rows = []
+    for r in golden_h1:
+        ts = datetime.fromisoformat(r["timestamp"].replace("+0000", "+00:00"))
+        rows.append({"t": ts.timestamp(), "open": r["open"], "high": r["high"],
+                     "low": r["low"], "close": r["close"], "volume": 100.0})
+    (tmp_path / "XAUUSD_H1.json").write_text(json.dumps(rows), encoding="utf-8")
+    # H4 rides along: a H1 entry experiment's context stack is H1+H4.
+    rows_h4 = []
+    for r in golden_h4:
+        ts = datetime.fromisoformat(r["timestamp"].replace("+0000", "+00:00"))
+        rows_h4.append({"t": ts.timestamp(), "open": r["open"], "high": r["high"],
+                        "low": r["low"], "close": r["close"], "volume": 100.0})
+    (tmp_path / "XAUUSD_H4.json").write_text(json.dumps(rows_h4), encoding="utf-8")
+    bare = cd.KairosHistoricalSource(tmp_path)
+
+    # Decision rows near the store's end so the only refusal cause is spread.
+    result = rp.replay("XAUUSD", "H1", bare, start="2026-08-14", limit=5,
                        registry_path=REGISTRY, version=VERSION)
     assert result.rows_refused > 0
     assert result.rows_scored == 0

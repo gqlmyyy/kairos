@@ -1,0 +1,46 @@
+{
+  "symbol": "EURUSD",
+  "timeframe": "H1",
+  "source": "mt5",
+  "downloaded_at": "2026-09-05T06:55:37.028146+00:00",
+  "data_start": "2021-09-06T00:00:00+00:00",
+  "data_end": "2026-09-04T23:00:00+00:00",
+  "row_count": 31110,
+  "schema_version": "kairos-candles-v2",
+  "timezone": "UTC",
+  "gap_summary": {
+    "gap_count": 271,
+    "by_category": {
+      "WEEKEND": 259,
+      "MARKET_CLOSED": 7,
+      "EXPECTED": 0,
+      "DATA_GAP": 3,
+      "UNKNOWN": 2
+    },
+    "largest_gap": {
+      "category": "MARKET_CLOSED",
+      "engine_category": "EXPECTED_MARKET_GAP",
+      "reason": "known_holiday",
+      "missing_bars": 72,
+      "duration_hours": 72.0,
+      "gap_start_utc": "2023-12-30T00:00:00+00:00",
+      "gap_end_utc": "2024-01-02T00:00:00+00:00",
+      "start_weekday": 5,
+      "stop_weekday": 4,
+      "start_hour_utc": 0,
+      "stop_hour_utc": 23,
+      "rule_checks": {
+        "weekly_close": "last trade Fri 23:xx UTC (Friday, late enough), resumes Tue (not weekend/Monday)",
+        "known_holiday": "overlaps an evidenced US market holiday",
+        "broker_maintenance": "00:00 UTC is recognized but has no typical size on record"
+      }
+    }
+  },
+  "coverage": {
+    "coverage_status": "COMPLETE",
+    "years_covered": 5.0,
+    "target_years": 5.0
+  },
+  "validation_status": "FAIL",
+  "path": "data\\historical\\EURUSD_H1.json"
+}

@@ -100,21 +100,49 @@ pytestmark_models = pytest.mark.skipif(
 
 
 @pytestmark_models
-def test_a_source_without_spread_refuses_to_predict_rather_than_inventing_it():
+def test_a_source_without_spread_refuses_to_predict_rather_than_inventing_it(tmp_path):
     """KAIROS's stored candles carry no spread; every research model needs it.
 
     The correct outcome is a refusal naming the unavailable features — not a
     prediction computed from a fabricated spread of zero, which would look
     entirely normal and be entirely wrong.
+
+    Phase 1 note: this test used to ride on the real data/historical snapshot
+    being pre-spread. Phase 1 re-fetched all nine datasets WITH the spread
+    column (scripts/fetch_training_candles.py captures it), so that ride-on no
+    longer holds. The policy under test is unchanged, so the no-spread
+    condition is now built explicitly from the golden XAUUSD H1 fixture with
+    its spread dropped — the exact shape the old snapshot had.
     """
+    import json
+    from datetime import datetime
+
     from analysis.research import candles as cd
     from analysis.research import replay as rp
 
-    source = cd.KairosHistoricalSource(ROOT / "data" / "historical")
-    if not source.available("XAUUSD", "H1"):
-        pytest.skip("no stored historical candles in this checkout")
+    golden_h1 = json.load(open(CANDLES / "XAUUSD_H1.json", encoding="utf-8"))
+    golden_h4 = json.load(open(CANDLES / "XAUUSD_H4.json", encoding="utf-8"))
+    rows = []
+    for r in golden_h1:
+        ts = datetime.fromisoformat(r["timestamp"].replace("+0000", "+00:00"))
+        rows.append({"t": ts.timestamp(), "open": r["open"], "high": r["high"],
+                     "low": r["low"], "close": r["close"], "volume": 100.0})
+    (tmp_path / "XAUUSD_H1.json").write_text(json.dumps(rows), encoding="utf-8")
+    # H4 rides along because a H1 entry experiment's context stack is H1+H4
+    # (load_stack refuses a stack missing its context timeframe).
+    rows_h4 = []
+    for r in golden_h4:
+        ts = datetime.fromisoformat(r["timestamp"].replace("+0000", "+00:00"))
+        rows_h4.append({"t": ts.timestamp(), "open": r["open"], "high": r["high"],
+                        "low": r["low"], "close": r["close"], "volume": 100.0})
+    (tmp_path / "XAUUSD_H4.json").write_text(json.dumps(rows_h4), encoding="utf-8")
+    source = cd.KairosHistoricalSource(tmp_path)
+    assert not source.provides_spread, "fixture must be a no-spread source"
 
-    result = rp.replay("XAUUSD", "H1", source, start="2024-06-01", limit=3,
+    # Decision rows near the END of the store so every price feature has its
+    # full warmup behind it (678 bars) and the ONLY refusal reason is the
+    # missing spread column -- exactly what the old snapshot test measured.
+    result = rp.replay("XAUUSD", "H1", source, start="2026-08-14", limit=3,
                        registry_path=REGISTRY, version=VERSION)
     assert result.rows_scored == 0
     assert set(result.status_counts) == {"FEATURE_UNAVAILABLE"}

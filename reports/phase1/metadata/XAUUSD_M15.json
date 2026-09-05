@@ -1,0 +1,48 @@
+{
+  "symbol": "XAUUSD",
+  "timeframe": "M15",
+  "source": "mt5",
+  "downloaded_at": "2026-09-05T06:55:41.158279+00:00",
+  "data_start": "2023-10-30T04:45:00+00:00",
+  "data_end": "2026-09-04T22:45:00+00:00",
+  "row_count": 66859,
+  "schema_version": "kairos-candles-v2",
+  "timezone": "UTC",
+  "gap_summary": {
+    "gap_count": 754,
+    "by_category": {
+      "WEEKEND": 143,
+      "MARKET_CLOSED": 543,
+      "EXPECTED": 0,
+      "DATA_GAP": 57,
+      "UNKNOWN": 11
+    },
+    "largest_gap": {
+      "category": "MARKET_CLOSED",
+      "engine_category": "EXPECTED_MARKET_GAP",
+      "reason": "known_holiday",
+      "missing_bars": 296,
+      "duration_hours": 74.0,
+      "gap_start_utc": "2024-03-28T23:00:00+00:00",
+      "gap_end_utc": "2024-04-01T01:00:00+00:00",
+      "start_weekday": 3,
+      "stop_weekday": 3,
+      "start_hour_utc": 23,
+      "stop_hour_utc": 22,
+      "rule_checks": {
+        "weekly_close": "last trade Thu 22:xx UTC (not Friday), resumes Mon (weekend/Monday)",
+        "known_holiday": "overlaps an evidenced US market holiday",
+        "broker_maintenance": "23:00 UTC typical size 8 bars (MAD 0.0), tolerance [7.0, 9.0]; this gap is 296 bars (outside tolerance)"
+      }
+    }
+  },
+  "coverage": {
+    "coverage_status": "INCOMPLETE",
+    "years_covered": 2.85,
+    "target_years": 5.0,
+    "reason": "terminal history depth for this timeframe ends at 2023-10-30 -- the shortfall is real and unfilled (no synthetic candles, no forward-fill)",
+    "requested_start": "2021-09-05T00:00:00+00:00"
+  },
+  "validation_status": "FAIL",
+  "path": "data\\historical\\XAUUSD_M15.json"
+}
