@@ -209,6 +209,19 @@ def validate_trade_request(
     if request.position_size <= 0:
         return _reject(f"position_size_not_positive:{request.position_size}", checks)
     if request.size_multiplier <= 0:
+        # A zero multiplier with a SERVING model is the sizing ladder's
+        # p_win < 0.50 veto (xgboost_v2_inference.get_size_multiplier). That
+        # rejection must be NAMED as what it is: an ML rejection against the
+        # decision threshold — not a sizing failure. The gate checks
+        # availability before size precisely so causes are not masked; the
+        # same principle applies when the cause is the probability's value.
+        if (request.ml_available and request.ml_p_win is not None
+                and _finite(request.ml_p_win)
+                and request.ml_p_win < request.ml_threshold):
+            return _reject(
+                f"ml_below_threshold:{request.ml_p_win:.3f}<{request.ml_threshold}",
+                checks,
+            )
         return _reject(f"size_multiplier_not_positive:{request.size_multiplier}", checks)
     checks.append("size_valid")
 

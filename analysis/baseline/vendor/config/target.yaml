@@ -1,0 +1,65 @@
+# Target definition: "TP before SL", not next-candle direction.
+# See TARGET_DEFINITION.md for the full specification.
+
+atr:
+  period: 14
+  method: "wilder"     # wilder | sma  (Wilder = classic RMA smoothing; sma = simple rolling mean of True Range)
+
+risk_reward:
+  sl_atr_multiple: 1.5
+  tp_atr_multiple: 2.5
+
+# Maximum number of forward bars searched for TP/SL resolution, per entry
+# timeframe. No infinite future is ever used. Change deliberately; report
+# the effect via `python main.py dataset build --compare-horizon`.
+max_holding_horizon_bars:
+  M15: 96      # 24h at 15m bars
+  M30: 48      # 24h at 30m bars
+  H1: 72       # 3 days at 1h bars
+  H4: 60       # 10 days at 4h bars
+
+# When both TP and SL levels fall inside the same forward bar's [low, high]
+# range, OHLC data alone cannot order them. Policy is explicit and the count
+# of affected samples is always logged in dataset.json.
+#   EXCLUDE        -> drop the sample entirely (default, safest)
+#   ASSUME_SL_FIRST -> conservative label = 0
+#   ASSUME_TP_FIRST -> optimistic label = 1 (NOT recommended; for sensitivity checks only)
+ambiguous_candle_policy: "EXCLUDE"
+
+# Phase 4: label validity across unexplained missing data. A horizon whose
+# forward path reaches a bar boundary classified DATA_GAP / UNKNOWN by the
+# project gap engine is invalidated (GAP_CROSSED) -- a missing bar could have
+# hidden the true first hit. EXPECTED session closures (weekends and verified
+# calendar holidays) do NOT invalidate: the horizon counts actually traded
+# bars only, and a closure jump landing inside one bar's [low, high] range is
+# handled by ambiguous_candle_policy above.
+#   EXCLUDE       -> GAP_CROSSED samples get no label (default, safest)
+#   KEEP_FLAGGED  -> keep the outcome but flag validity = GAP_CROSSED
+gap_crossed_policy: "EXCLUDE"
+
+# Research-rebuild repair R3. Separate from `gap_crossed_policy` above, which
+# governs the LABEL path and stays EXCLUDE: a bar missing from the forward
+# path could have hidden the true first TP/SL hit, so the label is a
+# correctness problem and must not be trusted.
+#
+# THIS setting governs the FEATURE side, which is a quality problem, not a
+# correctness one. A rolling indicator whose lookback window spans a gap is
+# still computed from real, adjacent bars -- the same value any charting
+# package shows -- and its per-row status is already carried in the
+# `feature_validity_code` META column.
+#
+# The pre-repair EXCLUDE behaviour deleted `max_feature_lookback` entry bars
+# around EVERY classified boundary. For an M15 stack whose longest context
+# window is 200 H4 bars, that is 3,200 M15 bars (~6.7 trading weeks) removed
+# per gap, and it is the dominant reason the eligible population collapsed to
+# 14-63% of the calendar in disjoint islands (see
+# data/reports/research_rebuild/forensics.json).
+#
+#   FLAG    -> keep the sample; its degraded status is in feature_validity_code
+#   EXCLUDE -> drop it (reproduces the frozen Phase 5+6 datasets)
+feature_window_gap_policy: "FLAG"
+
+# Entry direction(s) a sample may be generated for. "both" trains one model
+# on both long and short setups (with a `direction` feature); this does not
+# change the TP/SL formula, only which side of price TP/SL are placed on.
+entry_directions: ["long", "short"]

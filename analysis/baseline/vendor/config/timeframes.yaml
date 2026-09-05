@@ -1,0 +1,56 @@
+# Timeframe definitions used for spacing validation, gap classification and
+# multi-timeframe alignment. minutes must match the raw candle spacing.
+
+timeframes:
+  M15:
+    minutes: 15
+    role: "entry_timing"
+  M30:
+    minutes: 30
+    role: "entry_timing"
+  H1:
+    minutes: 60
+    role: "decision_setup"
+  H4:
+    minutes: 240
+    role: "trend"
+
+# Multi-timeframe stack used by the alignment engine, keyed by which
+# timeframe is acting as the ENTRY timeframe for a given experiment.
+# `context_timeframes` are as-of merged onto the entry timeframe using only
+# their last fully CLOSED candle at each entry timestamp (Section 14).
+#
+# Every symbol/timeframe combination is its own independent experiment
+# (Section 5/33) -- M15, M30, H1 and H4 can each be the entry timeframe. Only
+# COARSER timeframes than the entry timeframe make sense as context (a finer
+# timeframe would require intrabar data this project does not have), so:
+#   M15 entry -> H1 (decision/setup) + H4 (trend) context
+#   M30 entry -> H1 (decision/setup) + H4 (trend) context (M15 is finer than
+#                M30 and is therefore never used as its context)
+#   H1  entry -> H4 (trend) context only
+#   H4  entry -> no coarser timeframe available -> single-timeframe experiment
+mtf_stacks:
+  M15:
+    context_timeframes: [H1, H4]
+  M30:
+    context_timeframes: [H1, H4]
+  H1:
+    context_timeframes: [H4]
+  H4:
+    context_timeframes: []
+
+# Symbol-scoped, evidence-based session-closure rules used by the gap
+# classifier moved to config/session_rules.yaml (Phase 1 gap-engine
+# rebuild): a single generic weekly calendar applied identically to every
+# symbol could not distinguish a verified broker session from an unverified
+# guess, so it no longer lives here. See config/session_rules.yaml and
+# VALIDATION_METHODOLOGY.md.
+
+# Phase 3 (Section 4): explicit source declaration for timeframes that have
+# no independent raw acquisition stream. M30's source is FIXED to
+# deterministic aggregation of validated M15 candles -- no separate M30 feed
+# is added, and no other timeframe may be derived unless declared here.
+derived_timeframes:
+  M30:
+    from: M15
+    method: deterministic_ohlcv_aggregation   # src/features/mtf_derivation.py

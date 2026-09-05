@@ -1,0 +1,255 @@
+{
+  "generated_at": "2026-09-02T17:11:48",
+  "xgboost_version": "3.3.0",
+  "all_pass": true,
+  "load_and_mapping": {
+    "ok": true,
+    "models": [
+      {
+        "model": "EURUSD/M15",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\EURUSD\\M15\\model.json",
+        "exists": true,
+        "sha256": "6affa549020a0508341be064f5d49f191a4bfd4b8f634d2ff7620c24cdf97e7e",
+        "loads": true,
+        "num_feature": 203,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      },
+      {
+        "model": "EURUSD/H1",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\EURUSD\\H1\\model.json",
+        "exists": true,
+        "sha256": "5daceacb908dce94fdd2d003c626c4059d7dcd04aae8ddb31c3e2703d3243dff",
+        "loads": true,
+        "num_feature": 136,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      },
+      {
+        "model": "EURUSD/H4",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\EURUSD\\H4\\model.json",
+        "exists": true,
+        "sha256": "23642d12461edcdc28e50e8683489609480cbbd176bd1086245dc78ac1d79c90",
+        "loads": true,
+        "num_feature": 66,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      },
+      {
+        "model": "GBPUSD/M15",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\GBPUSD\\M15\\model.json",
+        "exists": true,
+        "sha256": "344e2e1553a8e1ce307c1e942047bedc8c473c5f9a51b6a9ccfce0a3e9d7ad7a",
+        "loads": true,
+        "num_feature": 203,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      },
+      {
+        "model": "GBPUSD/H1",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\GBPUSD\\H1\\model.json",
+        "exists": true,
+        "sha256": "064e49ef9bcbbfe7072b19875ec540f76803f10e54611c59f302134be5732404",
+        "loads": true,
+        "num_feature": 136,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      },
+      {
+        "model": "GBPUSD/H4",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\GBPUSD\\H4\\model.json",
+        "exists": true,
+        "sha256": "d3f68c783bfff0557b7706ff1e5ec57dccce9d8ff83d7b8abafa9b246ba4a0e1",
+        "loads": true,
+        "num_feature": 66,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      },
+      {
+        "model": "XAUUSD/M15",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\XAUUSD\\M15\\model.json",
+        "exists": true,
+        "sha256": "65cc01052574fd01974288bfd6a6940007c97ac4294aeae6ae44deb642e2fe98",
+        "loads": true,
+        "num_feature": 203,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      },
+      {
+        "model": "XAUUSD/H1",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\XAUUSD\\H1\\model.json",
+        "exists": true,
+        "sha256": "c07a7e8a92f2fc28f2dbbe39bbfe4d20f4fa7ae8df17c3d61827e5c49227afa8",
+        "loads": true,
+        "num_feature": 136,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      },
+      {
+        "model": "XAUUSD/H4",
+        "path": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\XAUUSD\\H4\\model.json",
+        "exists": true,
+        "sha256": "eba886b3425277f6c6ed10e1e4489138190d796fc347abb631ec9615dd0ef28b",
+        "loads": true,
+        "num_feature": 66,
+        "schema_fingerprint_ok": true,
+        "objective": "binary:logistic",
+        "ok": true
+      }
+    ]
+  },
+  "mapping_identity": {
+    "ok": true,
+    "load_calls_observed": 18,
+    "all_under_models_baseline": true,
+    "exactly_the_nine_expected_files": true,
+    "recorded_paths": [
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\EURUSD\\H1\\model.json",
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\EURUSD\\H4\\model.json",
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\EURUSD\\M15\\model.json",
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\GBPUSD\\H1\\model.json",
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\GBPUSD\\H4\\model.json",
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\GBPUSD\\M15\\model.json",
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\XAUUSD\\H1\\model.json",
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\XAUUSD\\H4\\model.json",
+      "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline\\XAUUSD\\M15\\model.json"
+    ]
+  },
+  "source_isolation": {
+    "ok": true,
+    "banned_reference_hits": [],
+    "runtime": {
+      "all_loads_under_models_baseline": true,
+      "load_calls_outside_baseline": []
+    }
+  },
+  "gold_parity": {
+    "ok": true,
+    "schemas": [
+      {
+        "schema": "EURUSD/H4",
+        "features_compared": 66,
+        "ref_close_time": "2025-08-28 20:00:00+00:00",
+        "max_abs_diff": 0.0,
+        "worst_feature": null,
+        "missing_from_pipeline": [],
+        "tolerance": 1e-06,
+        "ok": true
+      },
+      {
+        "schema": "EURUSD/H1",
+        "features_compared": 136,
+        "ref_close_time": "2025-09-25 14:00:00+00:00",
+        "max_abs_diff": 0.0,
+        "worst_feature": null,
+        "missing_from_pipeline": [],
+        "tolerance": 1e-06,
+        "ok": true
+      },
+      {
+        "schema": "EURUSD/M15",
+        "features_compared": 203,
+        "ref_close_time": "2026-01-14 02:30:00+00:00",
+        "max_abs_diff": 0.0,
+        "worst_feature": null,
+        "missing_from_pipeline": [],
+        "tolerance": 1e-06,
+        "ok": true
+      }
+    ]
+  },
+  "predictions": {
+    "ok": true,
+    "predictions": [
+      {
+        "model": "EURUSD/M15",
+        "buy_p_win": 0.21076440811157227,
+        "buy_status": "OK",
+        "sell_p_win": 0.780317485332489,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      },
+      {
+        "model": "EURUSD/H1",
+        "buy_p_win": 0.32916519045829773,
+        "buy_status": "OK",
+        "sell_p_win": 0.5254184007644653,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      },
+      {
+        "model": "EURUSD/H4",
+        "buy_p_win": 0.5106621980667114,
+        "buy_status": "OK",
+        "sell_p_win": 0.28649458289146423,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      },
+      {
+        "model": "GBPUSD/M15",
+        "buy_p_win": 0.3393406867980957,
+        "buy_status": "OK",
+        "sell_p_win": 0.5189560055732727,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      },
+      {
+        "model": "GBPUSD/H1",
+        "buy_p_win": 0.2852707803249359,
+        "buy_status": "OK",
+        "sell_p_win": 0.279909610748291,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      },
+      {
+        "model": "GBPUSD/H4",
+        "buy_p_win": 0.46566522121429443,
+        "buy_status": "OK",
+        "sell_p_win": 0.35749679803848267,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      },
+      {
+        "model": "XAUUSD/M15",
+        "buy_p_win": 0.2711111307144165,
+        "buy_status": "OK",
+        "sell_p_win": 0.27194681763648987,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      },
+      {
+        "model": "XAUUSD/H1",
+        "buy_p_win": 0.24692624807357788,
+        "buy_status": "OK",
+        "sell_p_win": 0.2083306759595871,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      },
+      {
+        "model": "XAUUSD/H4",
+        "buy_p_win": 0.3079296350479126,
+        "buy_status": "OK",
+        "sell_p_win": 0.7034943699836731,
+        "sell_status": "OK",
+        "direction_sensitive": true,
+        "ok": true
+      }
+    ]
+  }
+}

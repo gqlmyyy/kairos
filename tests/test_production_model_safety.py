@@ -274,7 +274,11 @@ class TestEntryV2IsQuarantined:
         monkeypatch.setenv("ENTRY_MODEL_VERSION", "v2")
         with pytest.raises(ValueError, match="quarantined"):
             importlib.reload(config)
-        monkeypatch.delenv("ENTRY_MODEL_VERSION")
+        # Re-pin rather than delete: the suite pins the shipped defaults (see
+        # tests/conftest.py) and the operator's .env may legitimately select
+        # another supported version -- deleting the variable here would let
+        # .env leak into the reloaded module and pollute later tests.
+        monkeypatch.setenv("ENTRY_MODEL_VERSION", "v1")
         importlib.reload(config)
         assert config.ENTRY_MODEL_VERSION == "v1"
 

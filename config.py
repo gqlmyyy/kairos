@@ -69,7 +69,7 @@ TELEGRAM_CHAT_ID = _env_str("TELEGRAM_CHAT_ID", "")
 MT5_LOGIN = _env_int("MT5_LOGIN", 0)
 MT5_PASSWORD = _env_str("MT5_PASSWORD", "")
 MT5_SERVER = _env_str("MT5_SERVER", "")
-MT5_PATH = _env_str("MT5_PATH", r"C:\Program Files\MetaTrader 5\terminal64.exe")
+MT5_PATH = _env_str("MT5_PATH", r"C:\\Program Files\\MetaTrader 5\\terminal64.exe")
 
 # ==============================
 # Trading Pairs
@@ -101,7 +101,7 @@ SYMBOLS = ["EURUSD", "XAUUSD", "GBPUSD"]
 # analysis/research/production_gate.py.
 ENTRY_MODEL_VERSION = _env_str("ENTRY_MODEL_VERSION", "v1")
 
-SUPPORTED_ENTRY_MODEL_VERSIONS = ("v1", "research")
+SUPPORTED_ENTRY_MODEL_VERSIONS = ("v1", "research", "baseline")
 
 if ENTRY_MODEL_VERSION not in SUPPORTED_ENTRY_MODEL_VERSIONS:
     raise ValueError(

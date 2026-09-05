@@ -97,7 +97,10 @@ def get_candles(symbol: str, timeframe: str = "4H", count: int = 100) -> list:
     always the last candle that has actually closed.
 
     Returns a list of dicts with keys: time, open, high, low, close,
-    tick_volume — the same shape the rest of the project already expects.
+    tick_volume, spread — the same shape the rest of the project already
+    expects. `spread` is MT5's per-bar spread in points; the baseline entry
+    models consume it as features (spread_points/relative/ma), and consumers
+    that ignore it are unaffected by its presence.
     """
     cache_key = f"{symbol}_{timeframe}_{count}"
     now = time.time()
@@ -158,6 +161,12 @@ def get_candles(symbol: str, timeframe: str = "4H", count: int = 100) -> list:
                 )
             return cached if cached is not None else []
 
+        # MT5's rate struct always carries a per-bar spread; some test mocks
+        # build bars without it, so the field is probed once and defaults to 0.
+        _spread_available = (
+            getattr(bars, "dtype", None) is not None
+            and "spread" in (bars.dtype.names or ())
+        )
         candles = [
             {
                 "time": int(b["time"]),
@@ -166,6 +175,7 @@ def get_candles(symbol: str, timeframe: str = "4H", count: int = 100) -> list:
                 "low": float(b["low"]),
                 "close": float(b["close"]),
                 "tick_volume": int(b["tick_volume"]),
+                "spread": int(b["spread"]) if _spread_available else 0,
             }
             for b in bars
         ]

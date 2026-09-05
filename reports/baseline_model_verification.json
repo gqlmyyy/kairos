@@ -1,0 +1,388 @@
+{
+  "generated_at": "2026-09-02T15:23:42",
+  "xgboost_version": "3.3.0",
+  "source": "F:\\files (2)\\kibo\\the win\\kairos\\models\\baseline",
+  "seed": 42,
+  "models": [
+    {
+      "model": "models\\baseline\\EURUSD\\M15\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 595856,
+      "sha256": "6affa549020a0508341be064f5d49f191a4bfd4b8f634d2ff7620c24cdf97e7e",
+      "objective": "binary:logistic",
+      "num_feature": 203,
+      "n_feature_names": 203,
+      "n_trees": 300,
+      "base_score": "[3.682883E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.10130241513252258,
+        "random_std": 0.052628811448812485,
+        "random_min": 0.01809440366923809,
+        "random_max": 0.3813152313232422,
+        "zeros_mean": 0.04933895170688629,
+        "ones_mean": 0.30674734711647034
+      },
+      "status": "PASS"
+    },
+    {
+      "model": "models\\baseline\\EURUSD\\H1\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 572049,
+      "sha256": "5daceacb908dce94fdd2d003c626c4059d7dcd04aae8ddb31c3e2703d3243dff",
+      "objective": "binary:logistic",
+      "num_feature": 136,
+      "n_feature_names": 136,
+      "n_trees": 300,
+      "base_score": "[3.6853933E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.1659267097711563,
+        "random_std": 0.09858222305774689,
+        "random_min": 0.03247516602277756,
+        "random_max": 0.6428030729293823,
+        "zeros_mean": 0.26025882363319397,
+        "ones_mean": 0.6021535396575928
+      },
+      "status": "PASS"
+    },
+    {
+      "model": "models\\baseline\\EURUSD\\H4\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 510032,
+      "sha256": "23642d12461edcdc28e50e8683489609480cbbd176bd1086245dc78ac1d79c90",
+      "objective": "binary:logistic",
+      "num_feature": 66,
+      "n_feature_names": 66,
+      "n_trees": 300,
+      "base_score": "[3.738641E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.3029312491416931,
+        "random_std": 0.1153397262096405,
+        "random_min": 0.05494244024157524,
+        "random_max": 0.6412957906723022,
+        "zeros_mean": 0.5281566977500916,
+        "ones_mean": 0.42552247643470764
+      },
+      "status": "PASS"
+    },
+    {
+      "model": "models\\baseline\\GBPUSD\\M15\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 616853,
+      "sha256": "344e2e1553a8e1ce307c1e942047bedc8c473c5f9a51b6a9ccfce0a3e9d7ad7a",
+      "objective": "binary:logistic",
+      "num_feature": 203,
+      "n_feature_names": 203,
+      "n_trees": 300,
+      "base_score": "[3.701471E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.16575893759727478,
+        "random_std": 0.10466540604829788,
+        "random_min": 0.03589518740773201,
+        "random_max": 0.6826950311660767,
+        "zeros_mean": 0.2373141199350357,
+        "ones_mean": 0.16036567091941833
+      },
+      "status": "PASS"
+    },
+    {
+      "model": "models\\baseline\\GBPUSD\\H1\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 600761,
+      "sha256": "064e49ef9bcbbfe7072b19875ec540f76803f10e54611c59f302134be5732404",
+      "objective": "binary:logistic",
+      "num_feature": 136,
+      "n_feature_names": 136,
+      "n_trees": 300,
+      "base_score": "[3.785655E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.22529688477516174,
+        "random_std": 0.09012404084205627,
+        "random_min": 0.04031192511320114,
+        "random_max": 0.6096369624137878,
+        "zeros_mean": 0.08509993553161621,
+        "ones_mean": 0.16380582749843597
+      },
+      "status": "PASS"
+    },
+    {
+      "model": "models\\baseline\\GBPUSD\\H4\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 567795,
+      "sha256": "d3f68c783bfff0557b7706ff1e5ec57dccce9d8ff83d7b8abafa9b246ba4a0e1",
+      "objective": "binary:logistic",
+      "num_feature": 66,
+      "n_feature_names": 66,
+      "n_trees": 300,
+      "base_score": "[3.6842105E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.34443503618240356,
+        "random_std": 0.11947142332792282,
+        "random_min": 0.05847814679145813,
+        "random_max": 0.7515383362770081,
+        "zeros_mean": 0.4466581344604492,
+        "ones_mean": 0.1698390394449234
+      },
+      "status": "PASS"
+    },
+    {
+      "model": "models\\baseline\\XAUUSD\\M15\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 616769,
+      "sha256": "65cc01052574fd01974288bfd6a6940007c97ac4294aeae6ae44deb642e2fe98",
+      "objective": "binary:logistic",
+      "num_feature": 203,
+      "n_feature_names": 203,
+      "n_trees": 300,
+      "base_score": "[3.8156784E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.16498695313930511,
+        "random_std": 0.08094757795333862,
+        "random_min": 0.024009035900235176,
+        "random_max": 0.4811761677265167,
+        "zeros_mean": 0.16800683736801147,
+        "ones_mean": 0.2602146565914154
+      },
+      "status": "PASS"
+    },
+    {
+      "model": "models\\baseline\\XAUUSD\\H1\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 585459,
+      "sha256": "c07a7e8a92f2fc28f2dbbe39bbfe4d20f4fa7ae8df17c3d61827e5c49227afa8",
+      "objective": "binary:logistic",
+      "num_feature": 136,
+      "n_feature_names": 136,
+      "n_trees": 300,
+      "base_score": "[3.7210575E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.3122631311416626,
+        "random_std": 0.09135419875383377,
+        "random_min": 0.10458254814147949,
+        "random_max": 0.6460527181625366,
+        "zeros_mean": 0.5032218098640442,
+        "ones_mean": 0.4406884014606476
+      },
+      "status": "PASS"
+    },
+    {
+      "model": "models\\baseline\\XAUUSD\\H4\\model.json",
+      "exists": true,
+      "checks": {
+        "json_parses": true,
+        "metadata_consistent": true,
+        "booster_loads": true,
+        "inference_runs": true,
+        "outputs_finite": true,
+        "outputs_in_unit_interval": true,
+        "deterministic": true,
+        "responds_to_input": true
+      },
+      "size_bytes": 568999,
+      "sha256": "eba886b3425277f6c6ed10e1e4489138190d796fc347abb631ec9615dd0ef28b",
+      "objective": "binary:logistic",
+      "num_feature": 66,
+      "n_feature_names": 66,
+      "n_trees": 300,
+      "base_score": "[3.8577744E-1]",
+      "first_features": [
+        "entry_direction",
+        "rsi",
+        "atr",
+        "macd_line",
+        "macd_signal",
+        "macd_histogram",
+        "trend_strength",
+        "trend_score"
+      ],
+      "output_stats": {
+        "random_mean": 0.15458911657333374,
+        "random_std": 0.07032450288534164,
+        "random_min": 0.04323944076895714,
+        "random_max": 0.4969005882740021,
+        "zeros_mean": 0.14383666217327118,
+        "ones_mean": 0.18420612812042236
+      },
+      "status": "PASS"
+    }
+  ],
+  "per_timeframe_feature_schema": {
+    "M15": {
+      "n_features": 203,
+      "identical_across_symbols": true
+    },
+    "H1": {
+      "n_features": 136,
+      "identical_across_symbols": true
+    },
+    "H4": {
+      "n_features": 66,
+      "identical_across_symbols": true
+    }
+  },
+  "feature_schema_consistent": true,
+  "stacked_hierarchy_check": {
+    "H1_superset_of_H4": true,
+    "M15_superset_of_H1": false
+  },
+  "all_pass": true
+}

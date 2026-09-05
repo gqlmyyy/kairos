@@ -44,7 +44,7 @@ from decision.voting_engine import make_decision
 from decision.signal_engine import generate_signal
 from decision.confidence_engine import calculate_confidence
 from risk.risk_engine import can_trade
-from risk.position_sizing import calculate_position_size
+from risk.position_sizing import MAX_LOT_PER_SYMBOL, calculate_position_size
 from risk.risk_governor import get_risk_governor
 from risk.trade_gate import TradeRequest, validate_trade_request
 from execution.order_validation import validate_market_data
@@ -699,6 +699,19 @@ def run_cycle():
                     row=_entry_inputs,
                     entry_direction=direction,
                 )
+            elif ENTRY_MODEL_VERSION == "baseline":
+                # models/baseline is the ONLY source of trained entry models:
+                # nine per-(symbol, timeframe) artifacts. This gate loads the
+                # pair/timeframe's own file, builds the feature row with the
+                # vendored training pipeline, and never reads models/entry/
+                # or any other store. There is no fallback.
+                from analysis.baseline import gate as baseline_gate
+
+                v2_result = baseline_gate.predict_entry(
+                    symbol=symbol,
+                    timeframe=TF_DECISION,
+                    entry_direction=direction,
+                )
             elif ENTRY_MODEL_VERSION == "v2":
                 from analysis.entry_v2.inference import predict_with_entry_v2
 
@@ -834,7 +847,16 @@ def run_cycle():
             # compute multiplier again using same p_win & logic (no threshold change)
             size_multiplier = get_size_multiplier(xgboost_p_win)
             base_size = position_size
-            position_size = round(position_size * size_multiplier, 2)
+            # The ML multiplier scales the risk-approved size. It must never
+            # lift the trade past the per-symbol lot ceiling that
+            # calculate_position_size already clamped to: a 1.5x confidence
+            # multiplier on a 0.5-lot cap would otherwise trade 0.75 lots and
+            # silently raise the trade's risk past what the gate approved.
+            position_size = round(
+                min(position_size * size_multiplier,
+                    MAX_LOT_PER_SYMBOL.get(symbol, 0.10)),
+                2,
+            )
 
             # ============================================================
             # Send distances to open_trade - it will calculate final SL/TP
@@ -991,9 +1013,14 @@ def main():
     # rejection means the operator learns the bot's actual filtering posture
     # from line one of the log instead of from a REJECT reason on cycle 1.
     try:
-        from analysis.models.xgboost_v2_inference import load_v2_model
+        if ENTRY_MODEL_VERSION == "baseline":
+            from analysis.baseline import gate as _baseline_gate
 
-        _ml_model_available = load_v2_model() is not None
+            _ml_model_available = _baseline_gate.probe_availability()
+        else:
+            from analysis.models.xgboost_v2_inference import load_v2_model
+
+            _ml_model_available = load_v2_model() is not None
     except Exception as exc:  # noqa: BLE001 - diagnostics must never stop boot
         logger.warning("[ML_MODE] could not probe model availability: %s", exc)
         _ml_model_available = False

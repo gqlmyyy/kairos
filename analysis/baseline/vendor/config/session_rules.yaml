@@ -1,0 +1,76 @@
+# Symbol-scoped, versioned, evidence-based session-closure rules used by the
+# gap classification engine (src/validation/gap_classifier.py).
+#
+# CONFIDENCE LEVELS
+#   VERIFIED - confirmed directly from a terminal/broker API call whose
+#              actual returned data was inspected and non-empty (not merely
+#              "the function exists").
+#   HIGH     - derived from repeated, consistent EMPIRICAL observation across
+#              a documented number of real fetched weeks. Must cite the
+#              evidence (date range, number of weeks, tolerance observed).
+#   LOW      - an unverified convention/assumption (e.g. "generic FX weekend
+#              closure"). NEVER sufficient on its own to classify a gap as
+#              EXPECTED_SESSION_GAP -- can only be surfaced as candidate
+#              context on a DATA_GAP/UNKNOWN record's `evidence` field.
+#
+# Only rules with confidence VERIFIED or HIGH are ever used to grant
+# EXPECTED_SESSION_GAP. A LOW-confidence rule can never grant that status by
+# itself, no matter how well-established the convention appears -- this
+# project does not invent a broker's session hours and call them verified.
+#
+# Research note (verified this session): the MetaTrader5 Python package does
+# NOT reliably expose SymbolInfoSessionTrade/SymbolInfoSessionQuote -- the
+# attributes exist but return empty session_trade_windows/session_quote_windows
+# on real installs (community-confirmed; also true of this project's pinned
+# MetaTrader5==5.0.5735). So "VERIFIED" via a direct terminal API call is not
+# realistically achievable today; the practical path to a HIGH-confidence
+# rule is empirical inference from a real, sufficiently long fetch history
+# (planned for Phase 2 -- src/data_acquisition, not yet implemented) or a
+# broker-confirmed schedule you supply directly.
+
+version: 1
+
+# Global fallback threshold: an unexplained gap (in bar-equivalents, after
+# subtracting any VERIFIED/HIGH-confidence rule coverage) larger than this
+# is classified DATA_GAP purely on size evidence -- no session knowledge is
+# needed to make this call. Anything unexplained but at/under this size, with
+# no sufficiently-confident rule to explain it either, is UNKNOWN (honest
+# ignorance, not silently accepted).
+data_gap_multiple: 6
+
+# Per-symbol list of VERIFIED/HIGH-confidence rules. Intentionally empty for
+# every symbol right now -- see the research note above. Do not add an entry
+# here without a concrete `evidence` string a reader could go verify.
+#
+# Rule shape (documented for Phase 2, which will populate these):
+#   - confidence: HIGH            # VERIFIED | HIGH only (LOW belongs below)
+#     source: empirical_observation   # mt5_api | empirical_observation | broker_documentation | user_supplied
+#     version: 1
+#     evidence: "<what was actually observed/confirmed, with dates/counts>"
+#     weekday_close: 4             # 0=Monday .. 6=Sunday
+#     time_close: "21:00"
+#     weekday_open: 6
+#     time_open: "21:00"
+#     timezone: "UTC"              # DST-aware sources should split into
+#                                  # multiple date-ranged rules instead of
+#                                  # one rule spanning a DST transition
+rules:
+  XAUUSD: []
+  EURUSD: []
+  GBPUSD: []
+
+# LOW-confidence candidates: shown in a gap's `evidence` field purely for
+# human context when they overlap an unexplained window. NEVER used to
+# compute unexplained_bars, and NEVER able to produce EXPECTED_SESSION_GAP.
+low_confidence_candidates:
+  generic_fx_weekend:
+    description: >
+      Widely-observed industry convention: most FX/CFD/metals brokers close
+      for the weekend from around Friday 21:00 UTC to Sunday 21:00 UTC. Not
+      verified against any specific broker, account, or symbol -- do not
+      promote to HIGH/VERIFIED without real evidence (Phase 2).
+    weekday_close: 4
+    time_close: "21:00"
+    weekday_open: 6
+    time_open: "21:00"
+    timezone: "UTC"

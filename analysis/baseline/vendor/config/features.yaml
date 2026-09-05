@@ -1,0 +1,217 @@
+# Feature configuration. Every feature is computed causally (only data at/<=
+# timestamp t on its own timeframe). See FEATURE_CONTRACT.md for formulas.
+# Column order in the final dataset is deterministic: it follows
+# src/features/feature_schema.json, generated from this config plus the
+# MTF stack in config/timeframes.yaml.
+
+# 1.1.0 added extended indicators, ATR-normalised price action, daily
+# structure, momentum acceleration and explicit MTF alignment features. All
+# were APPENDED after the 1.0.0 features, so every pre-existing feature kept
+# its column position and a 1.0.0-trained model still maps onto the same
+# leading columns.
+#
+# 1.2.0 (Phase 3 feature-engineering freeze) appended -- never interleaved --
+# a small set of contract-completing features under `phase3_additions` below
+# (SMA, log-return, atr_pct, session clock, spread). The same append-only
+# rule applies: every 1.0.0/1.1.0 column keeps its exact position.
+feature_schema_version: "1.2.0"
+
+baseline_indicators:
+  rsi:
+    enabled: true
+    period: 14
+  atr:
+    enabled: true
+    period: 14
+  macd:
+    enabled: true
+    fast: 12
+    slow: 26
+    signal: 9
+  trend_strength:
+    enabled: true
+    ema_fast: 20
+    ema_slow: 50
+  trend_score:
+    enabled: true
+    lookback: 20
+  momentum_score:
+    enabled: true
+    lookback: 10
+  volatility_score:
+    enabled: true
+    atr_period: 14
+    lookback: 50
+  market_regime:
+    enabled: true
+    adx_period: 14
+    adx_trend_threshold: 25
+  session:
+    enabled: true
+    sessions:
+      asian: ["00:00", "08:00"]
+      london: ["08:00", "16:00"]
+      newyork: ["13:00", "21:00"]
+  direction:
+    enabled: true
+    ema_period: 20
+
+price_action:
+  returns:
+    enabled: true
+    periods: [1, 3, 5]
+  normalized_returns:
+    enabled: true
+    atr_period: 14
+  range:
+    enabled: true
+  body_size:
+    enabled: true
+  upper_wick:
+    enabled: true
+  lower_wick:
+    enabled: true
+  distance_from_recent_high:
+    enabled: true
+    lookback: 20
+  distance_from_recent_low:
+    enabled: true
+    lookback: 20
+  rolling_volatility:
+    enabled: true
+    lookback: 20
+
+optional_structure:
+  ema:
+    enabled: true
+    periods: [20, 50]
+  adx:
+    enabled: true
+    period: 14
+  support_resistance:
+    enabled: false
+    lookback: 50
+  fractals:
+    enabled: false
+    window: 2          # bars each side required to confirm a fractal
+    confirmation_lag: 2 # a fractal at bar i is only usable starting bar i+confirmation_lag
+  swing_points:
+    enabled: false
+    lookback: 20
+
+# ---------------------------------------------------------------------------
+# Extended features (schema 1.1.0). These blocks are read AFTER every block
+# above, and the engine appends their features at the END of the feature
+# order -- never interleaved -- so existing column positions never shift.
+# ---------------------------------------------------------------------------
+
+extended_indicators:
+  bollinger_bands:
+    enabled: true
+    period: 20
+    std: 2.0
+  stochastic:
+    enabled: true
+    k_period: 14
+    d_period: 3
+    smooth: 3          # SMA applied to raw %K to give the "slow" %K
+  cci:
+    enabled: true
+    period: 20         # feature is named cci_<period>
+
+extended_price_action:
+  # ATR-normalised versions of the existing range/body/wick features. The
+  # raw price-unit originals above are kept; these are additions.
+  atr_normalized_price_action:
+    enabled: true
+    atr_period: 14
+  # Distance from the EMAs already computed in optional_structure, expressed
+  # in ATR units so the value does not scale with the instrument's price.
+  ema_distance:
+    enabled: true
+    ema_fast: 20
+    ema_slow: 50
+    atr_period: 14
+  # Position within the CURRENT day's range so far. Day boundaries use
+  # `session_timezone` from config/symbols.yaml. Running cummax/cummin only
+  # -- the day's final high/low is never used (that would be look-ahead).
+  daily_structure:
+    enabled: true
+    atr_period: 14
+  # Momentum acceleration + returns in ATR units. Periods are taken from
+  # price_action.returns.periods above, so the two stay consistent.
+  momentum_acceleration:
+    enabled: true
+    atr_period: 14
+
+# Explicit cross-timeframe agreement features, computed AFTER the MTF merge
+# (src/features/mtf_features.py). Trend state reuses the existing `direction`
+# indicator -- sign(close - EMA(period)) -- rather than defining a second,
+# competing notion of trend. Context values arrive only once their own candle
+# has closed, via the unchanged merge_asof alignment.
+mtf_alignment_features:
+  enabled: true
+
+# News/macro calendar features are NOT implemented in this version (no
+# historical archive available). The schema below is reserved so a future
+# version can add them without breaking feature ordering of existing models.
+reserved_future_features:
+  economic_news:
+    enabled: false
+    events: ["CPI", "NFP", "FOMC", "INTEREST_RATE", "GDP", "PMI"]
+
+# ---------------------------------------------------------------------------
+# Phase 3 additions (feature_schema 1.2.0). Appended AFTER every block above;
+# the engine emits them at the END of the per-timeframe feature order.
+#
+# Deliberately EXCLUDED here: `real_volume`. It is identically zero across
+# every dataset in this repository (measured directly against data/raw/mt5
+# during the Phase 3 audit), so it can never carry information.
+# ---------------------------------------------------------------------------
+phase3_additions:
+  # Simple moving average + distance-to-SMA in ATR units. Complements the
+  # existing EMA block; explicitly listed in the Phase 3 baseline spec.
+  sma:
+    enabled: true
+    period: 20
+
+  # Log returns: time-additive alternative to pct_change returns.
+  log_returns:
+    enabled: true
+    periods: [1]
+
+  # Volatility normalized by price level (dimensionless), complementing
+  # volatility_score (ATR / rolling-mean-ATR).
+  atr_pct:
+    enabled: true
+
+  # Session-clock features: pure functions of the row's own timestamp in
+  # session_timezone. Per-symbol trading-day opens are the DOMINANT empirical
+  # values observed in the Phase 2 audit (FX majors open 00:00 UTC; XAUUSD
+  # opens 01:00 UTC). Fixed-UTC approximation across DST-split days is a
+  # documented limitation in the Phase 3 report -- not silently hidden.
+  session_clock:
+    enabled: true
+    default_trading_day_open_utc: "00:00"
+    trading_day_open_utc:
+      EURUSD: "00:00"
+      GBPUSD: "00:00"
+      XAUUSD: "01:00"
+
+  # Spread IS available in the canonical schema, but its reliability differs
+  # by symbol/timeframe (Phase 3 measurement: zero-spread share -- XAUUSD
+  # ~5-13%, GBPUSD 18-48%, EURUSD 50-74%). Zeros are kept as real
+  # observations (never interpolated); consumers are warned via the report.
+  spread:
+    enabled: true
+    relative_lookback: 200
+    mean_lookback: 50
+    # Research-rebuild repair R1. A literal 0 spread is a real, common
+    # observation on these feeds (EURUSD 50-74% of bars), so a trailing median
+    # of 0 is normal -- not missing data. STRICT (the pre-repair behaviour)
+    # divided by NaN there, and because the dataset builder drops any row with
+    # one non-finite feature, this single optional column deleted the majority
+    # of EURUSD's calendar in multi-month blocks.
+    #   UNIT_WHEN_ALSO_ZERO -> ratio is 1.0 when spread and median are both 0
+    #   STRICT              -> always NaN on a zero median (reproduces Phase 5/6/7)
+    zero_median_policy: "UNIT_WHEN_ALSO_ZERO"

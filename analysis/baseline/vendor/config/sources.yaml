@@ -1,0 +1,128 @@
+# Historical data sources.
+#
+# A "source" is ONLY an acquisition layer: it decides where raw candles come
+# from and where they are stored. Everything downstream -- validation,
+# features, target, walk-forward, training, calibration, backtest, export --
+# is identical regardless of source, and never learns which source it is
+# looking at. Two sources are never mixed inside one dataset: raw and
+# validated data are stored under source-scoped directories, and every
+# experiment records the source it was built from.
+#
+# Canonical symbol names (XAUUSD / EURUSD / GBPUSD) are used everywhere in
+# this project. A source-specific instrument name, when it differs, is
+# resolved ONLY at that source's acquisition boundary (same rule the MT5
+# `broker_symbol` override already follows).
+
+default_source: "mt5"
+
+sources:
+
+  mt5:
+    description: >
+      Local MetaTrader 5 terminal via the official MetaTrader5 Python API.
+      Windows-only, requires a running/logged-in terminal. Bars are the
+      broker's own; `tick_volume` is the broker's tick count and `spread`
+      is in broker points.
+    raw_subdir: "mt5"
+    # Per-symbol broker instrument overrides live in config/symbols.yaml
+    # (symbols.<SYMBOL>.broker_symbol) -- MT5 resolves them against the
+    # terminal at fetch time, so they are not duplicated here.
+    tick_volume_semantics: "broker_tick_count"
+    real_volume_semantics: "mt5_real_volume_often_zero_and_unused"
+    spread_semantics: "broker_points"
+
+  dukascopy:
+    description: >
+      Dukascopy public historical tick datafeed (.bi5 files), aggregated
+      locally into OHLCV bars. Runs on any OS; needs network access ONLY
+      during `data fetch`. Bars are built from BID ticks (matching the MT5
+      convention that a chart bar is a bid bar).
+    raw_subdir: "dukascopy"
+    base_url: "https://datafeed.dukascopy.com/datafeed"
+    # Dukascopy encodes prices as integers that must be divided by
+    # 10**decimals. This is instrument-specific and is NOT guessable from
+    # the symbol name, so it is declared explicitly per instrument below.
+    # A symbol missing from `instruments` is a hard, explicit failure -- the
+    # fetcher never guesses an instrument name or a price scale.
+    instruments:
+      EURUSD:
+        instrument: "EURUSD"
+        decimals: 5
+      GBPUSD:
+        instrument: "GBPUSD"
+        decimals: 5
+      XAUUSD:
+        # Dukascopy quotes gold as XAUUSD with 3 decimals, NOT 5 like the
+        # FX pairs -- getting this wrong silently scales every price by 100.
+        instrument: "XAUUSD"
+        decimals: 3
+    # `tick_volume` written by this source is a genuine COUNT of ticks in the
+    # bar, which is the same KIND of quantity as MT5's tick_volume but comes
+    # from a different liquidity pool -- the two are comparable in nature,
+    # never identical in value.
+    tick_volume_semantics: "dukascopy_tick_count"
+    # Dukascopy also reports a traded volume per tick, in millions of base
+    # currency units. That is NOT MT5's `real_volume` (exchange volume). It
+    # is preserved in the `real_volume` column rather than discarded, but its
+    # true meaning is recorded here and in every fetch's provenance, and no
+    # feature in this project consumes it (see FEATURE_CONTRACT.md).
+    real_volume_semantics: "dukascopy_sum_bid_ask_tick_volume_millions_base_ccy"
+    # Per-tick spread (ask - bid) converted into the SAME point convention
+    # MT5 uses, so src/backtest/costs.py (spread x pip_size) stays correct
+    # for both sources without a per-source branch. The bar's recorded value
+    # is the MEDIAN spread across its ticks.
+    spread_semantics: "points_median_of_bar_ticks"
+    # Persistent local tick cache. Tick files are keyed by (symbol, UTC hour)
+    # and NEVER by timeframe, so M30/H1/H4 over a range already fetched cost
+    # zero HTTP requests -- they are all aggregated from these same files.
+    # Delete this directory to force a re-download.
+    cache_dir: "data/cache/dukascopy/ticks"
+
+    # Request pacing. The first version of this downloader sent one request
+    # per hourly file back-to-back and was answered with HTTP 429, then
+    # dropped connections (WinError 10054/10060). These values exist so the
+    # feed is treated politely; raising the request rate to "go faster" is
+    # what caused the problem in the first place.
+    requests:
+      # Minimum gap between EVERY request, enforced by one process-wide
+      # limiter per host. Raise it if you still see 429s; there is no value
+      # here that is known to be optimal.
+      min_delay_seconds: 1.0
+      timeout_seconds: 30
+      # Applies only to genuinely transient outcomes (429 / 5xx / network).
+      # A 404 or an empty 200 body is a definitive answer and is never retried.
+      max_retries: 6
+      # Backoff = min(base * 2**attempt, max) + random jitter, so retries
+      # across many files never wake in lockstep. With these defaults:
+      # 2s, 4s, 8s, 16s, 32s, 60s (capped).
+      base_backoff_seconds: 2.0
+      max_backoff_seconds: 60.0
+      jitter_seconds: 0.5
+
+      # A 429 says "this CLIENT is asking too much", so the response pauses
+      # EVERY request, not just the retry of that one URL. Escalates on each
+      # repeat: 60s, 120s, 240s ... capped at max_cooldown_seconds.
+      cooldown_seconds: 60.0
+      max_cooldown_seconds: 900.0
+      # Stop the whole download job once this many hours in a row exhaust
+      # their 429 retries. 1 is the right default: if a file still 429s after
+      # several escalating cooldowns, the client is being refused and the
+      # remaining hours would fail the same way. Everything already cached is
+      # kept, so re-running resumes from where it stopped.
+      systemic_429_threshold: 1
+
+      # Request identity. DIAGNOSED CAUSE of "curl gets 200, Python gets 429
+      # on the very first request": urllib.request.urlopen() announces itself
+      # as `User-Agent: Python-urllib/x.y` and sends no Accept headers, which
+      # the feed's CDN rejects on sight -- an identity problem, not a rate
+      # problem, which no amount of extra delay can fix.
+      #
+      # This is ONE fixed value. It is never randomized, never rotated, and
+      # never combined with proxies or IP rotation. Run
+      # `python main.py data http-diagnose` to see the evidence for your own
+      # connection. Leave blank to use the built-in default.
+      user_agent: ""
+      # Reuse a single keep-alive connection instead of opening (and TLS-
+      # handshaking) a fresh one for every hourly file -- ~744 handshakes for
+      # one month, which is slow and itself looks abusive.
+      use_persistent_connection: true

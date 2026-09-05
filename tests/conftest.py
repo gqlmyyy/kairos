@@ -7,6 +7,15 @@ import sys
 
 import pytest
 
+# --- Hermetic config for the unit-test suite -------------------------------
+# The suite pins the *code defaults*; operator overrides living in .env must
+# not change what these tests assert. load_dotenv() never overrides variables
+# already present in the environment, so pinning them here -- before any
+# module imports config -- keeps every test on the shipped defaults no matter
+# what the running bot's .env says.
+os.environ.setdefault("ENTRY_ML_MODE", "required")
+os.environ.setdefault("ENTRY_MODEL_VERSION", "v1")
+
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from trade_management.layer6_trade_profile import resolve_settings  # noqa: E402

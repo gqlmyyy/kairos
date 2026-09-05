@@ -1,0 +1,76 @@
+# Symbols and their raw-data location / column schema.
+# Training Lab is standalone: it never guesses filenames or column names.
+# If your MT5 export uses different column names, edit `column_map` per symbol
+# (or add a `default_column_map` override) rather than renaming your export files.
+
+data_timezone: "UTC"        # timezone the raw `timestamp` column is expressed in
+session_timezone: "UTC"     # timezone used for weekly session/gap-calendar classification
+
+default_column_map:
+  timestamp: "timestamp"
+  open: "open"
+  high: "high"
+  low: "low"
+  close: "close"
+  spread: "spread"
+  tick_volume: "tick_volume"
+  real_volume: "real_volume"   # optional; may be absent or all-zero -> flagged invalid, unused
+
+# Used instead of default_column_map/column_map when the resolved raw file is
+# `.json` (an MT5 `copy_rates_*`-style array-of-objects export, e.g.
+# `[{"t": ..., "open": ..., ..., "volume": ..., "real_volume": ...}, ...]`).
+# `t` is a Unix-epoch timestamp (seconds or milliseconds, auto-detected) and
+# `volume` is the tick-volume field under a different name -- both differ from
+# the CSV/MT5-terminal-export column names above, so they get their own map
+# rather than overloading default_column_map.
+default_json_column_map:
+  timestamp: "t"
+  open: "open"
+  high: "high"
+  low: "low"
+  close: "close"
+  spread: "spread"
+  tick_volume: "volume"
+  real_volume: "real_volume"
+
+# `broker_symbol` (optional, per symbol below) pins the exact instrument name
+# your broker's MT5 terminal uses, e.g. "XAUUSD.m" or "EURUSDpro". It is used
+# ONLY at the MT5 acquisition boundary (`python main.py data fetch`); every
+# other layer of this project -- raw files, validated data, session rules,
+# datasets, experiments, exports -- always uses the CANONICAL name (the key
+# below). No suffix/prefix convention is hard-coded anywhere: leave this null
+# and the fetcher first tries the canonical name exactly, then asks the
+# terminal for instruments whose name starts with it. If exactly one matches
+# it is used and recorded in provenance; if several match, the fetch FAILS and
+# lists them, so an ambiguous instrument is never silently chosen -- set this
+# field explicitly to resolve that.
+symbols:
+  XAUUSD:
+    description: "Gold vs US Dollar"
+    pip_size: 0.01
+    raw_dir: "data/raw/XAUUSD"
+    column_map: null        # null = use default_column_map (CSV/Parquet)
+    column_map_json: null   # null = use default_json_column_map (JSON)
+    broker_symbol: null     # null = resolve at the MT5 boundary (see note above)
+
+  EURUSD:
+    description: "Euro vs US Dollar"
+    pip_size: 0.00001
+    raw_dir: "data/raw/EURUSD"
+    column_map: null
+    column_map_json: null
+    broker_symbol: null
+
+  GBPUSD:
+    description: "British Pound vs US Dollar"
+    pip_size: 0.00001
+    raw_dir: "data/raw/GBPUSD"
+    column_map: null
+    column_map_json: null
+    broker_symbol: null
+
+# Data period is auto-detected from each file at import time. These are only
+# soft expectations shown in reports/warnings, never a hard filter.
+expected_period:
+  start: "2023-08-01"
+  end: "2026-08-31"
